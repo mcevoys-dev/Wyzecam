@@ -1,0 +1,3 @@
+name: Wyze Bridge DB3
+url: https://github.com/mcevoys-dev/Wyzecam
+maintainer: Local packaging of docker-wyze-bridge v4.5.0 with the WYZEDB3 and strict-filter patches

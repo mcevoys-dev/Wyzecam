@@ -1,0 +1,379 @@
+diff --git a/pkg/tutk/dtls/dtls.go b/pkg/tutk/dtls/dtls.go
+index 3b0573a..9a479e6 100644
+--- a/pkg/tutk/dtls/dtls.go
++++ b/pkg/tutk/dtls/dtls.go
+@@ -69,6 +69,10 @@ func buildDTLSConfig(psk []byte, isServer bool) *dtls.Config {
+ 		config.CipherSuites = []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CBC_SHA256}
+ 	} else {
+ 		config.CustomCipherSuites = CustomCipherSuites
++		// Older firmware (e.g. Wyze Video Doorbell v1, WYZEDB3 4.25.x) does not
++		// support the ChaCha20 suite and aborts with HandshakeFailure. Custom
++		// suites are offered first, so newer cameras keep negotiating ChaCha20.
++		config.CipherSuites = []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CBC_SHA256}
+ 	}
+ 
+ 	return config
+diff --git a/pkg/tutk/dtls/dtls_test.go b/pkg/tutk/dtls/dtls_test.go
+new file mode 100644
+index 0000000..761f1ef
+--- /dev/null
++++ b/pkg/tutk/dtls/dtls_test.go
+@@ -0,0 +1,74 @@
++package dtls
++
++import (
++	"context"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/pion/dtls/v3"
++)
++
++// handshake runs the client config against a pion server restricted to the
++// given suites and returns the negotiated suite.
++func handshake(t *testing.T, server *dtls.Config, psk []byte) (dtls.CipherSuiteID, error) {
++	t.Helper()
++	ln, err := dtls.Listen("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, server)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	go func() {
++		c, err := ln.Accept()
++		if err == nil {
++			_ = c.(*dtls.Conn).HandshakeContext(context.Background())
++			time.Sleep(200 * time.Millisecond)
++			c.Close()
++		}
++	}()
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	cfg := buildDTLSConfig(psk, false)
++	cfg.FlightInterval = 50 * time.Millisecond
++	conn, err := dtls.Dial("udp", ln.Addr().(*net.UDPAddr), cfg)
++	if err != nil {
++		return 0, err
++	}
++	defer conn.Close()
++	if err = conn.HandshakeContext(ctx); err != nil {
++		return 0, err
++	}
++	st, _ := conn.ConnectionState()
++	return st.CipherSuiteID, nil
++}
++
++func serverCfg(psk []byte) *dtls.Config {
++	return &dtls.Config{
++		PSK:                  func([]byte) ([]byte, error) { return psk, nil },
++		PSKIdentityHint:      []byte("AUTHPWD_admin"),
++		ExtendedMasterSecret: dtls.DisableExtendedMasterSecret,
++	}
++}
++
++// Older firmware (Wyze Video Doorbell v1) only supports AES-128-CBC.
++func TestClientHandshakeAESOnlyServer(t *testing.T) {
++	psk := DerivePSK("testenr123456789")
++	s := serverCfg(psk)
++	s.CipherSuites = []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CBC_SHA256}
++	id, err := handshake(t, s, psk)
++	if err != nil || id != dtls.TLS_PSK_WITH_AES_128_CBC_SHA256 {
++		t.Fatalf("got %v %v", id, err)
++	}
++}
++
++// Newer firmware must keep negotiating ChaCha20.
++func TestClientHandshakeChaChaServer(t *testing.T) {
++	psk := DerivePSK("testenr123456789")
++	s := serverCfg(psk)
++	s.CustomCipherSuites = CustomCipherSuites
++	s.CipherSuites = []dtls.CipherSuiteID{}
++	id, err := handshake(t, s, psk)
++	if err != nil || id != CipherSuiteID_CCAC {
++		t.Fatalf("got %v %v", id, err)
++	}
++}
+diff --git a/pkg/tutk/frame.go b/pkg/tutk/frame.go
+index db5bf07..6de8bdb 100644
+--- a/pkg/tutk/frame.go
++++ b/pkg/tutk/frame.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/hex"
+ 	"fmt"
+ 	"sync"
++	"time"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/aac"
+ )
+@@ -27,6 +28,10 @@ const (
+ 
+ const frameInfoSize = 40
+ 
++// legacyFrameInfoSize is the FRAMEINFO size used by older firmware
++// (Wyze Video Doorbell v1, WYZEDB3 4.25.x), signalled with marker 0x30.
++const legacyFrameInfoSize = 48
++
+ // FrameInfo - Wyze extended FRAMEINFO (40 bytes at end of packet)
+ // Video: 40 bytes, Audio: 16 bytes (uses same struct, fields 16+ are zero)
+ //
+@@ -78,13 +83,25 @@ func (fi *FrameInfo) Channels() uint8 {
+ }
+ 
+ func ParseFrameInfo(data []byte) *FrameInfo {
+-	if len(data) < frameInfoSize {
++	return ParseFrameInfoSized(data, frameInfoSize)
++}
++
++// ParseFrameInfoSized parses a trailing FRAMEINFO of the given size. The
++// 48-byte legacy struct shares the layout of the first 24 bytes, but its
++// bytes 8-11 are not a running timestamp, so arrival time is used instead.
++func ParseFrameInfoSized(data []byte, size int) *FrameInfo {
++	if len(data) < size {
+ 		return nil
+ 	}
+ 
+-	offset := len(data) - frameInfoSize
++	offset := len(data) - size
+ 	fi := data[offset:]
+ 
++	ts := binary.LittleEndian.Uint32(fi[8:])
++	if size == legacyFrameInfoSize {
++		ts = uint32(time.Now().UnixMicro() % int64(tsWrapPeriod))
++	}
++
+ 	return &FrameInfo{
+ 		CodecID:     fi[0],
+ 		Flags:       fi[2],
+@@ -93,7 +110,7 @@ func ParseFrameInfo(data []byte) *FrameInfo {
+ 		FPS:         fi[5],
+ 		ResTier:     fi[6],
+ 		Bitrate:     fi[7],
+-		Timestamp:   binary.LittleEndian.Uint32(fi[8:]),
++		Timestamp:   ts,
+ 		SessionID:   binary.LittleEndian.Uint32(fi[12:]),
+ 		PayloadSize: binary.LittleEndian.Uint32(fi[16:]),
+ 		FrameNo:     binary.LittleEndian.Uint32(fi[20:]),
+@@ -120,6 +137,7 @@ type PacketHeader struct {
+ 	PktTotal     uint16
+ 	PayloadSize  uint16
+ 	HasFrameInfo bool
++	FISize       int // size of the trailing FRAMEINFO when HasFrameInfo
+ }
+ 
+ func ParsePacketHeader(data []byte) *PacketHeader {
+@@ -150,8 +168,9 @@ func ParsePacketHeader(data []byte) *PacketHeader {
+ 		hdr.PayloadSize = binary.LittleEndian.Uint16(data[16:])
+ 		hdr.FrameNo = binary.LittleEndian.Uint32(data[24:])
+ 
+-		if pktIdxOrMarker == 0x0028 && (IsEndFrame(frameType) || hdr.PktTotal == 1) {
++		if fiSize := frameInfoMarker(frameType, pktIdxOrMarker, hdr.PktTotal); fiSize > 0 {
+ 			hdr.HasFrameInfo = true
++			hdr.FISize = fiSize
+ 			if hdr.PktTotal > 0 {
+ 				hdr.PktIdx = hdr.PktTotal - 1
+ 			}
+@@ -164,8 +183,9 @@ func ParsePacketHeader(data []byte) *PacketHeader {
+ 		hdr.PayloadSize = binary.LittleEndian.Uint16(data[24:])
+ 		hdr.FrameNo = binary.LittleEndian.Uint32(data[32:])
+ 
+-		if pktIdxOrMarker == 0x0028 && (IsEndFrame(frameType) || hdr.PktTotal == 1) {
++		if fiSize := frameInfoMarker(frameType, pktIdxOrMarker, hdr.PktTotal); fiSize > 0 {
+ 			hdr.HasFrameInfo = true
++			hdr.FISize = fiSize
+ 			if hdr.PktTotal > 0 {
+ 				hdr.PktIdx = hdr.PktTotal - 1
+ 			}
+@@ -177,6 +197,56 @@ func ParsePacketHeader(data []byte) *PacketHeader {
+ 	return hdr
+ }
+ 
++// frameInfoMarker returns the FRAMEINFO size signalled in the packet-index
++// field of a frame's last packet, or 0 if the field holds a packet index.
++func frameInfoMarker(frameType uint8, v uint16, pktTotal uint16) int {
++	// Older firmware (Wyze Video Doorbell v1, WYZEDB3 4.25.x) signals a 48-byte
++	// FRAMEINFO (marker 0x30) and can put it on a StartAlt (0x09) packet too.
++	// A real packet index is always < pktTotal, so a marker value >= pktTotal
++	// cannot be mistaken for one.
++	if v >= pktTotal {
++		if size := markerSize(v); size > 0 {
++			return size
++		}
++	}
++	if v == frameInfoSize && (IsEndFrame(frameType) || pktTotal == 1) {
++		return frameInfoSize
++	}
++	return 0
++}
++
++func markerSize(v uint16) int {
++	switch v {
++	case frameInfoSize, legacyFrameInfoSize:
++		return int(v)
++	}
++	return 0
++}
++
++// reinterpretLastPacket handles frames with more packets than the marker
++// value (e.g. 72-packet keyframes ending with marker 48): there the marker is
++// indistinguishable from a packet index by the header alone. If we are
++// waiting for exactly the last packet and get a marker value instead, it is
++// the frame's end.
++func (h *FrameHandler) reinterpretLastPacket(hdr *PacketHeader) {
++	if hdr.HasFrameInfo || hdr.PktTotal == 0 {
++		return
++	}
++	if !IsEndFrame(hdr.FrameType) && hdr.FrameType != FrameTypeStartAlt {
++		return
++	}
++	cs := h.channels[hdr.Channel]
++	if cs == nil || !cs.hasStarted || cs.frameNo != hdr.FrameNo ||
++		cs.waitSeq != hdr.PktTotal-1 || hdr.PktIdx == cs.waitSeq {
++		return
++	}
++	if size := markerSize(hdr.PktIdx); size > 0 {
++		hdr.HasFrameInfo = true
++		hdr.FISize = size
++		hdr.PktIdx = cs.waitSeq
++	}
++}
++
+ func IsStartFrame(frameType uint8) bool {
+ 	return frameType == FrameTypeStart || frameType == FrameTypeStartAlt
+ }
+@@ -279,7 +349,11 @@ func (h *FrameHandler) Handle(data []byte) {
+ 		return
+ 	}
+ 
+-	payload, fi := h.extractPayload(data, hdr.Channel)
++	if hdr.Channel == ChannelIVideo || hdr.Channel == ChannelPVideo {
++		h.reinterpretLastPacket(hdr)
++	}
++
++	payload, fi := h.extractPayload(data, hdr)
+ 	if payload == nil {
+ 		return
+ 	}
+@@ -302,7 +376,8 @@ func (h *FrameHandler) Handle(data []byte) {
+ 	}
+ }
+ 
+-func (h *FrameHandler) extractPayload(data []byte, channel byte) ([]byte, *FrameInfo) {
++func (h *FrameHandler) extractPayload(data []byte, hdr *PacketHeader) ([]byte, *FrameInfo) {
++	channel := hdr.Channel
+ 	if len(data) < 2 {
+ 		return nil, nil
+ 	}
+@@ -335,6 +410,10 @@ func (h *FrameHandler) extractPayload(data []byte, channel byte) ([]byte, *Frame
+ 		headerSize = 28
+ 	}
+ 
++	if hdr.HasFrameInfo && hdr.FISize > 0 {
++		fiSize = hdr.FISize
++	}
++
+ 	if len(data) < headerSize {
+ 		return nil, nil
+ 	}
+@@ -347,7 +426,7 @@ func (h *FrameHandler) extractPayload(data []byte, channel byte) ([]byte, *Frame
+ 		return data[headerSize:], nil
+ 	}
+ 
+-	fi := ParseFrameInfo(data)
++	fi := ParseFrameInfoSized(data, fiSize)
+ 
+ 	validCodec := false
+ 	switch channel {
+diff --git a/pkg/tutk/frame_marker_test.go b/pkg/tutk/frame_marker_test.go
+new file mode 100644
+index 0000000..075b7cd
+--- /dev/null
++++ b/pkg/tutk/frame_marker_test.go
+@@ -0,0 +1,88 @@
++package tutk
++
++import (
++	"encoding/binary"
++	"encoding/hex"
++	"testing"
++)
++
++func TestFrameInfoMarker(t *testing.T) {
++	cases := []struct {
++		ft       uint8
++		v, total uint16
++		want     int
++	}{
++		{FrameTypeEndMulti, 0x28, 5, 40}, // newer firmware
++		{FrameTypeEndMulti, 48, 16, 48},  // Doorbell v1
++		{FrameTypeStartAlt, 48, 2, 48},   // Doorbell v1 StartAlt carrying FI
++		{FrameTypeEndMulti, 4, 5, 0},     // real last index
++		{FrameTypeEndMulti, 48, 72, 0},   // 48 is a real index when total=72 (start of frame)
++		{FrameTypeCont, 3, 16, 0},        // continuation
++	}
++	for _, c := range cases {
++		if got := frameInfoMarker(c.ft, c.v, c.total); got != c.want {
++			t.Errorf("frameInfoMarker(%#x,%d,%d)=%d want %d", c.ft, c.v, c.total, got, c.want)
++		}
++	}
++}
++
++// Packet captured from a WYZEDB3 on firmware 4.25.1.333: single-packet P-frame
++// (ch 0x07, type 0x05) with a 48-byte FRAMEINFO.
++func TestDoorbellV1SinglePacketFrame(t *testing.T) {
++	hdr, _ := hex.DecodeString("07050b0064001d7707015a0001003000e603000004000000030000000000000121f61b09edff001d")
++	fi, _ := hex.DecodeString("4e000000000f030001000000b9eae76ab6030000072d0400000000000000000000000000000000000000000000000000")
++	payloadLen := int(binary.LittleEndian.Uint16(hdr[16:])) - len(fi) // 998
++	pkt := make([]byte, 28+payloadLen+len(fi))
++	copy(pkt, hdr[:28])
++	copy(pkt[28:], hdr[28:])
++	copy(pkt[28+payloadLen:], fi)
++
++	h := NewFrameHandler(false)
++	h.Handle(pkt)
++	select {
++	case p := <-h.Recv():
++		if p.Codec != CodecH264 || len(p.Payload) != payloadLen {
++			t.Fatalf("got codec=%#x len=%d", p.Codec, len(p.Payload))
++		}
++	default:
++		t.Fatal("no frame emitted")
++	}
++}
++
++func mkPkt28(ch, ft byte, total, idxOrMarker uint16, frameNo uint32, payload []byte) []byte {
++	b := make([]byte, 28+len(payload))
++	b[0], b[1] = ch, ft
++	binary.LittleEndian.PutUint16(b[12:], total)
++	binary.LittleEndian.PutUint16(b[14:], idxOrMarker)
++	binary.LittleEndian.PutUint16(b[16:], uint16(len(payload)))
++	binary.LittleEndian.PutUint32(b[24:], frameNo)
++	copy(b[28:], payload)
++	return b
++}
++
++// A keyframe with more packets than the marker value (seen on the doorbell
++// as 72-packet keyframes ending with marker 48) must still assemble.
++func TestLargeFrameEndingWithMarker(t *testing.T) {
++	const total = 60
++	h := NewFrameHandler(false)
++	var want int
++	for i := 0; i < total-1; i++ {
++		p := make([]byte, 100)
++		want += len(p)
++		h.Handle(mkPkt28(ChannelIVideo, FrameTypeCont, total, uint16(i), 7, p))
++	}
++	last := make([]byte, 30)
++	want += len(last)
++	fi := make([]byte, 48)
++	fi[0], fi[2] = CodecH264, 1
++	binary.LittleEndian.PutUint32(fi[16:], uint32(want))
++	h.Handle(mkPkt28(ChannelIVideo, FrameTypeEndMulti, total, 48, 7, append(last, fi...)))
++	select {
++	case p := <-h.Recv():
++		if len(p.Payload) != want || !p.IsKeyframe {
++			t.Fatalf("got len=%d key=%v want %d", len(p.Payload), p.IsKeyframe, want)
++		}
++	default:
++		t.Fatal("no frame emitted")
++	}
++}

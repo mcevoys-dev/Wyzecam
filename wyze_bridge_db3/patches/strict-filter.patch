@@ -1,0 +1,53 @@
+--- a/internal/camera/filter.go
++++ b/internal/camera/filter.go
+@@ -41,8 +41,10 @@
+ 		}
+ 	}
+ 
++	// A configured filter that matches nothing stays empty. Returning the
++	// original list here would stream every camera.
+ 	if len(result) == 0 {
+-		return cameras // never filter to empty
++		return nil
+ 	}
+ 	return result
+ }
+--- a/internal/camera/filter_test.go
++++ b/internal/camera/filter_test.go
+@@ -71,11 +71,19 @@
+ 	}
+ }
+ 
+-func TestFilter_NeverFilterToEmpty(t *testing.T) {
+-	f := &Filter{Names: []string{"NONEXISTENT"}}
+-	cams := makeCams()
++func TestFilter_UnmatchedNameIsEmpty(t *testing.T) {
++	f := &Filter{Names: []string{"SIDE DOOR"}}
++	result := f.Apply(makeCams())
++	if len(result) != 0 {
++		t.Fatalf("unmatched nickname returned %d cameras", len(result))
++	}
++}
++
++func TestFilter_MatchedNameOnly(t *testing.T) {
++	cams := append(makeCams(), wyzeapi.CameraInfo{Nickname: "Side door", Model: "WYZEDB3", MAC: "AABB44"})
++	f := &Filter{Names: []string{"SIDE DOOR"}}
+ 	result := f.Apply(cams)
+-	if len(result) != len(cams) {
+-		t.Errorf("should not filter to empty: got %d, want %d", len(result), len(cams))
++	if len(result) != 1 || result[0].Nickname != "Side door" {
++		t.Fatalf("matched nickname returned %#v", result)
+ 	}
+ }
+--- a/internal/camera/manager.go
++++ b/internal/camera/manager.go
+@@ -169,6 +169,9 @@
+ 	}
+ 
+ 	filtered := m.filter.Apply(supported)
++	if m.filter.HasFilters() && len(filtered) == 0 {
++		return fmt.Errorf("camera filter matched 0 cameras; refusing to stream the unfiltered list")
++	}
+ 
+ 	m.log.Info().
+ 		Int("discovered", len(cameras)).

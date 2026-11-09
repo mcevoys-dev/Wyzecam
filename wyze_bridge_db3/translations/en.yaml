@@ -1,0 +1,52 @@
+configuration:
+  wyze_email:
+    name: Wyze account email
+    description: >-
+      WYZE_EMAIL. The email for the Wyze account that owns the doorbell.
+      You can use a Home Assistant !secret reference.
+  wyze_password:
+    name: Wyze account password
+    description: >-
+      WYZE_PASSWORD. Stored by the Supervisor as an app option. It is not
+      written into this package.
+  wyze_api_id:
+    name: Wyze API ID
+    description: >-
+      WYZE_API_ID from the Wyze developer console, as required by
+      docker-wyze-bridge 4.5.0.
+  wyze_api_key:
+    name: Wyze API key
+    description: >-
+      WYZE_API_KEY from the Wyze developer console, as required by
+      docker-wyze-bridge 4.5.0.
+  wyze_totp_key:
+    name: Wyze TOTP key
+    description: >-
+      Optional WYZE_TOTP_KEY. Set it only when the Wyze account has TOTP
+      turned on. Leave it empty otherwise.
+  web_username:
+    name: Web UI username
+    description: >-
+      BRIDGE_USERNAME. Required. The Web UI asks for this in addition to
+      your Home Assistant login.
+  web_password:
+    name: Web UI password
+    description: >-
+      BRIDGE_PASSWORD. Required. Basic auth stays on. This package does not
+      derive it from the Wyze email.
+  rtsp_username:
+    name: RTSP username
+    description: >-
+      The username half of STREAM_AUTH. At least 8 characters. Do not use a
+      colon, @, or vertical bar. Required before the app will start.
+  rtsp_password:
+    name: RTSP password
+    description: >-
+      The password half of STREAM_AUTH. At least 16 characters. A colon is
+      allowed. @ and a vertical bar are not. Required before the app will
+      start. Host port 8554 stays authenticated with this password.
+  filter_names:
+    name: Camera nickname
+    description: >-
+      FILTER_NAMES. One Wyze nickname. The default is Side door, matched
+      without case sensitivity. A comma is rejected so the list cannot grow.
