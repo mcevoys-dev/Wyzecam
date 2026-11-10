@@ -129,6 +129,10 @@ Bridge filter, with Go 1.26.4 on linux/amd64, after `strict-filter.patch` on the
 
 `tests/test_run.sh` checked startup with a fake bridge. It does not exercise the filter; that is the Go test above.
 
+## Host listeners and LD_CFP, v4.5.0-wyzedb3.7
+
+`patches/kvs-keyframe.patch` sha256 `822239633c3f63d78afbcca9e84de72df78d1c2c58dffeffcc84e79151c309f3` is applied to go2rtc v1.9.14 after the doorbell patch. It sends a picture-loss indication for an active video producer and logs the negotiated medias plus a byte count. `patches/kvs-media-log.patch` sha256 `3f147dbbb9306c6405dd9f2c2504f45d497ba223e1a66d9dcfdb3e3a045bd1a7` adds those codec names to the bridge's `go2rtc source state` line and warns when the byte count is still zero.
+
 ## Host listeners and LD_CFP, v4.5.0-wyzedb3.6
 
 `patches/kvs-ice-urls.patch` sha256 `09414081a4e8a020213650ca27b24cf7f0e95061c62b68a28bd4457675b69443` is applied after the listener patch. It changes the shim's ICE JSON key from `url` to `urls` and logs a redacted go2rtc probe (`go2rtc source state`) after a WebRTC source is registered. The probe error text has URL queries and userinfo removed.

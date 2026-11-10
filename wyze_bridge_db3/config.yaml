@@ -1,5 +1,5 @@
 name: Wyze Bridge DB3
-version: "4.5.0-wyzedb3.6"
+version: "4.5.0-wyzedb3.7"
 slug: wyze_bridge_db3
 description: >-
   Local stream bridge for one Wyze camera, built to carry the unreleased

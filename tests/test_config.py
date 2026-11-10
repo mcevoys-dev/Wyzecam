@@ -15,7 +15,7 @@ APP = ROOT / "wyze_bridge_db3"
 def main() -> None:
     config = yaml.safe_load((APP / "config.yaml").read_text())
     assert config["slug"] == "wyze_bridge_db3"
-    assert config["version"] == "4.5.0-wyzedb3.6"
+    assert config["version"] == "4.5.0-wyzedb3.7"
     assert config["boot"] == "manual"
     assert config["init"] is False
     assert config["host_network"] is True
@@ -89,8 +89,10 @@ def main() -> None:
         "wyzedb3-a42e34e-pkg-tutk.patch",
         "strict-filter.patch",
         "host-listeners.patch",
-        "4.5.0+strict-filter+hostnet+kvs",
+        "4.5.0+strict-filter+hostnet+kvs+pli",
         "kvs-ice-urls.patch",
+        "kvs-keyframe.patch",
+        "kvs-media-log.patch",
         "iproute2",
     ):
         assert needle in dockerfile, needle
@@ -164,6 +166,21 @@ def main() -> None:
     assert "X-Amz-Security-Token" not in kvs_added or "TestRedactLog" in kvs_added
     assert hashlib.sha256(kvs.encode()).hexdigest() == (
         "09414081a4e8a020213650ca27b24cf7f0e95061c62b68a28bd4457675b69443"
+    )
+
+    keyframe = (APP / "patches/kvs-keyframe.patch").read_text()
+    assert "ModeActiveProducer" in keyframe
+    assert "PictureLossIndication" in keyframe
+    assert "kvs negotiated" in keyframe
+    assert "kvs bytes" in keyframe
+    assert hashlib.sha256(keyframe.encode()).hexdigest() == (
+        "822239633c3f63d78afbcca9e84de72df78d1c2c58dffeffcc84e79151c309f3"
+    )
+    media_log = (APP / "patches/kvs-media-log.patch").read_text()
+    assert "codecs=" in media_log
+    assert "bytes=0" in media_log
+    assert hashlib.sha256(media_log.encode()).hexdigest() == (
+        "3f147dbbb9306c6405dd9f2c2504f45d497ba223e1a66d9dcfdb3e3a045bd1a7"
     )
 
     repo = yaml.safe_load((ROOT / "repository.yaml").read_text())
