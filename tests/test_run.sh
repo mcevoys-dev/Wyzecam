@@ -54,23 +54,6 @@ run_case missing 1 OPTIONS_JSON="${TMP}/nope.json"
 printf '%s\n' '{}' > "${TMP}/empty.json"
 run_case empty 1 OPTIONS_JSON="${TMP}/empty.json"
 
-# Secrets present, filter contains a comma.
-cat > "${TMP}/comma.json" << EOF
-{
-  "wyze_email": "${SECRET_EMAIL}",
-  "wyze_password": "${SECRET_PASSWORD}",
-  "wyze_api_id": "${SECRET_API_ID}",
-  "wyze_api_key": "${SECRET_API_KEY}",
-  "web_username": "${SECRET_WEB_USER}",
-  "web_password": "${SECRET_WEB_PASSWORD}",
-  "rtsp_username": "${SECRET_RTSP_USER}",
-  "rtsp_password": "${SECRET_RTSP_PASSWORD}",
-  "filter_names": "Side door,Garage"
-}
-EOF
-run_case comma 1 OPTIONS_JSON="${TMP}/comma.json"
-grep -q "one camera nickname" "${TMP}/comma.log"
-
 # Configured. The fake bridge checks the environment and prints a fixed line.
 cat > "${TMP}/fake-bridge" << 'EOF'
 #!/usr/bin/env python3
@@ -87,7 +70,7 @@ expected = {
 for key, value in expected.items():
     if os.environ.get(key) != value:
         sys.exit(2)
-if os.environ.get("FILTER_NAMES") != "Side door":
+if os.environ.get("FILTER_NAMES") != os.environ.get("EXPECT_FILTER", "Side door"):
     sys.exit(3)
 if os.environ.get("FILTER_BLOCKS") != "false":
     sys.exit(4)
@@ -147,6 +130,39 @@ run_case ready 0 \
   EXPECT_RTSP_USER="${SECRET_RTSP_USER}" \
   EXPECT_RTSP_PASSWORD="${SECRET_RTSP_PASSWORD}"
 grep -q "bridge-env-ok" "${TMP}/ready.log"
+
+python3 - "${TMP}/comma.json" << EOF
+import json, pathlib
+doc = json.loads(pathlib.Path("${TMP}/ready.json").read_text())
+doc["filter_names"] = "Side door,Garage Rear"
+pathlib.Path("${TMP}/comma.json").write_text(json.dumps(doc))
+EOF
+run_case comma 0 \
+  OPTIONS_JSON="${TMP}/comma.json" \
+  WYZE_BRIDGE_BIN="${TMP}/fake-bridge" \
+  WYZE_STATE_DIR="${TMP}/state-comma" \
+  WYZE_RTSP_BIND_IP="192.0.2.10" \
+  EXPECT_EMAIL="${SECRET_EMAIL}" \
+  EXPECT_PASSWORD="${SECRET_PASSWORD}" \
+  EXPECT_API_ID="${SECRET_API_ID}" \
+  EXPECT_API_KEY="${SECRET_API_KEY}" \
+  EXPECT_WEB_USER="${SECRET_WEB_USER}" \
+  EXPECT_WEB_PASSWORD="${SECRET_WEB_PASSWORD}" \
+  EXPECT_RTSP_USER="${SECRET_RTSP_USER}" \
+  EXPECT_RTSP_PASSWORD="${SECRET_RTSP_PASSWORD}" \
+  EXPECT_FILTER="Side door,Garage Rear"
+grep -q "bridge-env-ok" "${TMP}/comma.log"
+
+python3 - "${TMP}/empty-name.json" << EOF
+import json, pathlib
+doc = json.loads(pathlib.Path("${TMP}/ready.json").read_text())
+doc["filter_names"] = "Side door,"
+pathlib.Path("${TMP}/empty-name.json").write_text(json.dumps(doc))
+EOF
+run_case emptyname 1 \
+  OPTIONS_JSON="${TMP}/empty-name.json" \
+  WYZE_RTSP_BIND_IP="192.0.2.10"
+grep -q "empty camera nickname" "${TMP}/emptyname.log"
 
 # Password with a colon is accepted. @ is not.
 cat > "${TMP}/colon.json" << EOF

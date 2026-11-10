@@ -129,19 +129,22 @@ Bridge filter, with Go 1.26.4 on linux/amd64, after `strict-filter.patch` on the
 
 `tests/test_run.sh` checked startup with a fake bridge. It does not exercise the filter; that is the Go test above.
 
-## Host listeners, v4.5.0-wyzedb3.4
+## Host listeners and LD_CFP, v4.5.0-wyzedb3.5
 
-`patches/host-listeners.patch` sha256 `ef5bf78c24b8f7cbc8bf3fbb7c5b2081e73d8205c086e0e46e24e949a10b971a` is applied to the same v4.5.0 tree after `strict-filter.patch`. It changes three files: `internal/config/config.go`, `internal/go2rtcmgr/config.go`, and `internal/webui/server.go`.
+`patches/strict-filter.patch` sha256 `32ab5196f1d6205c12f2d93e9a326f58012635e7feec19eab88ee312bdac97d4` keeps an unmatched name list empty and adds `TestFilter_TwoExactNames` and `TestFilter_PartialNameIsEmpty`.
+
+`patches/host-listeners.patch` sha256 `6b89affb61b8a33b522a6df70e08e5b7b68c2c64bd5ea3ffe7a3f0d247b2ade5` is applied to the same v4.5.0 tree after the strict filter. It changes three files: `internal/config/config.go`, `internal/go2rtcmgr/config.go`, and `internal/webui/server.go`.
 
 | Listener | Resulting address | Why |
 | --- | --- | --- |
 | go2rtc API | `127.0.0.1:1984` | The bridge client is hardcoded to that URL. The `hass` module is not loaded, so go2rtc does not also bind the hassio gateway. |
 | Web UI | `172.30.32.1:5080` | Supervisor ingress uses the hassio gateway. Any other host is refused. |
-| RTSP | `WYZE_RTSP_LISTEN`, one IPv4, port 8554 | `run.sh` sets this to the default-route source. Loopback is refused because go2rtc skips RTSP auth for `127.0.0.1`. |
-| WebRTC, SRTP, RTMP | empty `listen` | go2rtc's defaults are `:8555`, `:8443`, and an open RTMP port when the module is loaded. Those modules are omitted. |
+| Internal shim | `127.0.0.1:5080` | Only `/internal/` routes. go2rtc's `webrtc:` client calls `/internal/wyze/webrtc/<camera>` on this port. |
+| RTSP | `192.168.1.70:8554` | `run.sh` requires this address on the host. Loopback, `0.0.0.0`, link-local, and `172.30.32.0/23` are refused because go2rtc skips RTSP auth for `127.0.0.1`. |
+| WebRTC, SRTP, RTMP servers | empty `listen` | The `webrtc` module is loaded so the client source exists. go2rtc opens `:8555` only when `listen` is non-empty. SRTP and RTMP stay unloaded. |
 
 Home Assistant Core, in current `dev` `homeassistant/components/go2rtc/server.py`, uses `127.0.0.1:18554`, `:18555/tcp`, and API port `11984`. This patch does not bind those.
 
-`4.5.0-wyzedb3.3` was built and installed on Home Assistant amd64 outside this tree. Its log showed one filtered doorbell and, on RTSP, `wyze: connect failed: discovery timeout`. No camera address, account, or log body is stored here. This version does not claim that host networking fixes that timeout.
+`LD_CFP` is `IsWebRTCStreamer` in docker-wyze-bridge v4.5.0. The stream URL is `webrtc:http://127.0.0.1:5080/internal/wyze/webrtc/<name>#format=wyze`. go2rtc v1.9.14 implements that format in `internal/webrtc/client.go`. The KVS client uses ephemeral UDP toward AWS. Those sockets are not the fixed server ports above.
 
-No container image of `4.5.0-wyzedb3.4` was built in this workspace. Supervisor builds the Dockerfile on the device after this branch is merged. Nothing here shows that a doorbell streamed.
+The patched bridge compiled with Go 1.26.4 and `go test ./internal/camera/ -run TestFilter_` passed. This VM has no Docker daemon, so the Home Assistant image was not built here. Nothing here shows that a doorbell or a floodlight streamed.

@@ -84,7 +84,7 @@
  // LogConfig controls go2rtc logging.
  type LogConfig struct {
  	Level string `yaml:"level"`
-@@ -141,34 +157,53 @@
+@@ -141,34 +157,55 @@
  	return entries
  }
  
@@ -116,9 +116,11 @@
 +		App: AppConfig{
 +			// hass is omitted on purpose. go2rtc's hass module, when api.listen
 +			// is 127.0.0.1:1984, also serves that API on the hassio gateway.
-+			// webrtc and srtp are omitted so :8555 and :8443 are not opened.
++			// webrtc is loaded for the client source (webrtc:…#format=wyze).
++			// Its listen address stays empty, so :8555 and :8889 are not opened.
++			// srtp and rtmp stay unloaded so :8443 and RTMP are not opened.
 +			Modules: []string{
-+				"api", "ws", "rtsp", "wyze", "ffmpeg", "exec", "http", "mp4", "hls", "mjpeg",
++				"api", "ws", "rtsp", "webrtc", "wyze", "ffmpeg", "exec", "http", "mp4", "hls", "mjpeg",
 +			},
 +		},
  		Log: LogConfig{Level: b.logLevel},
@@ -156,7 +158,15 @@
  	if len(b.streamAuth) == 1 && len(b.streamAuth[0].Cameras) == 0 {
 --- a/internal/webui/server.go
 +++ b/internal/webui/server.go
-@@ -117,15 +117,15 @@
+@@ -50,6 +50,7 @@
+ 	sseHub    *SSEHub
+ 	auth      *AuthMiddleware
+ 	srv       *http.Server
++	loopSrv   *http.Server // 127.0.0.1 shim for /internal/ only
+ 	version   string
+ 	startTime time.Time
+ 	// rootCtx ties fire-and-forget handler goroutines to bridge
+@@ -117,15 +118,15 @@
  // callbacks) stay as Set* methods because they're constructed after
  // the server is already listening.
  type Options struct {
@@ -181,19 +191,40 @@
  }
  
  // NewServer constructs a Server from Options. go2rtc, metrics
-@@ -196,19 +196,28 @@
+@@ -196,25 +197,58 @@
  }
  
  // Start begins serving HTTP.
-+// Host network shares the Home Assistant host stack, so the WebUI is
-+// bound only to the Supervisor docker gateway. Ingress connects there.
-+// 0.0.0.0 and loopback are refused: loopback is not reachable from the
-+// Supervisor container, and every interface would publish the UI on the LAN.
++// Host network shares the Home Assistant host stack. The WebUI stays on
++// the Supervisor docker gateway. A second listener on 127.0.0.1 serves
++// only /internal/, which is where go2rtc's webrtc client fetches the
++// KVS signaling URL. Loopback is not used for the WebUI: the Supervisor
++// container cannot reach it, and publishing the UI there is not ingress.
  func (s *Server) Start() error {
 +	if s.cfg.BridgeListenHost != "172.30.32.1" || s.cfg.BridgePort != 5080 {
 +		return fmt.Errorf("WebUI must listen on 172.30.32.1:5080")
 +	}
 +	addr := net.JoinHostPort(s.cfg.BridgeListenHost, fmt.Sprintf("%d", s.cfg.BridgePort))
++	loopAddr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", s.cfg.BridgePort))
++
++	loopLn, err := net.Listen("tcp", loopAddr)
++	if err != nil {
++		return fmt.Errorf("internal shim listen: %w", err)
++	}
++	internalMux := http.NewServeMux()
++	s.registerInternalRoutes(internalMux)
++	s.loopSrv = &http.Server{
++		Handler:      internalMux,
++		ReadTimeout:  30 * time.Second,
++		WriteTimeout: 60 * time.Second,
++		IdleTimeout:  120 * time.Second,
++	}
++	go func() {
++		s.log.Info().Str("addr", loopAddr).Msg("internal shim listening")
++		if serveErr := s.loopSrv.Serve(loopLn); serveErr != nil && serveErr != http.ErrServerClosed {
++			s.log.Error().Err(serveErr).Msg("internal shim server error")
++		}
++	}()
 +
  	mux := http.NewServeMux()
  	s.registerRoutes(mux)
@@ -212,3 +243,36 @@
  	return s.srv.ListenAndServe()
  }
  
+ // Shutdown gracefully stops the server.
+ func (s *Server) Shutdown(ctx context.Context) error {
+ 	s.sseHub.Close()
++	if s.loopSrv != nil {
++		_ = s.loopSrv.Shutdown(ctx)
++	}
+ 	return s.srv.Shutdown(ctx)
+ }
+ 
+@@ -325,14 +359,17 @@
+ 	mux.HandleFunc("/cams.m3u8", s.auth.Wrap(s.handleStreamsM3U8))
+ 	mux.HandleFunc("/stream/", s.auth.Wrap(s.handleStreamM3U8))
+ 
+-	// wyze-shim for the gwell-proxy sidecar. Loopback-only so Mars
+-	// credentials can't leak to the LAN. See internal/webui/shim.go.
++	// /internal/ is also served on 127.0.0.1 by Start. requireLoopback
++	// still applies on this ingress listener, so a LAN client that reaches
++	// 172.30.32.1 does not receive the shim.
++	s.registerInternalRoutes(mux)
++}
++
++// registerInternalRoutes publishes only the loopback shims. The KVS
++// handler returns short-lived TURN credentials for one camera.
++func (s *Server) registerInternalRoutes(mux *http.ServeMux) {
+ 	mux.HandleFunc("/internal/wyze/Camera/CameraList", requireLoopback(s.handleShimCameraList))
+ 	mux.HandleFunc("/internal/wyze/Camera/DeviceInfo", requireLoopback(s.handleShimDeviceInfo))
+ 	mux.HandleFunc("/internal/wyze/Camera/CameraToken", requireLoopback(s.handleShimCameraToken))
+-	// /internal/wyze/webrtc/<streamID> is a one-shot bootstrap that
+-	// go2rtc's native `#format=wyze` handler fetches when about to
+-	// dial Wyze's KVS signaling server. Loopback-only — the response
+-	// carries short-lived Wyze-scoped TURN credentials.
+ 	mux.HandleFunc("/internal/wyze/webrtc/", requireLoopback(s.handleShimKVSSignaling))
+ }

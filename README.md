@@ -50,7 +50,7 @@ After that URL is added, install **Wyze Bridge DB3**, fill the Configuration tab
 | `web_username` | `BRIDGE_USERNAME`, with `BRIDGE_AUTH=true` |
 | `web_password` | `BRIDGE_PASSWORD` |
 | `rtsp_username`, `rtsp_password` | `STREAM_AUTH=username:password` (at least 8 and 16 characters; no defaults) |
-| `filter_names` | `FILTER_NAMES` (one nickname, default `Side door`) |
+| `filter_names` | `FILTER_NAMES` (comma-separated exact nicknames, default `Side door,Garage Rear`) |
 
 Also forced: `GWELL_ENABLED=false`, `MQTT_ENABLED=false`, `MQTT_HOST` unset, `LOG_LEVEL=info`, `RECORD_ALL=false`, `SNAPSHOT_INTERVAL=0`. Session files go to `/data/wyze-bridge-state`.
 
@@ -85,18 +85,19 @@ bash tests/test_run.sh
 
 No Wyze login, no camera, and no Home Assistant were available. Unit tests cover the strict filter and the go2rtc packet and DTLS changes. They do not show that a doorbell streamed. The app container was not built; this environment has no Docker daemon.
 
-Version `4.5.0-wyzedb3.4` uses the host network so a TUTK UDP reply can reach the bridge. That is the approved test for the `discovery timeout` seen on `4.5.0-wyzedb3.3`. It does not prove Docker NAT was the cause, and it does not prove the doorbell will stream.
+Version `4.5.0-wyzedb3.5` keeps host networking and adds a second exact nickname for the Floodlight Pro (`LD_CFP`, `Garage Rear`). That model uses Wyze's cloud KVS WebRTC path. The go2rtc WebRTC module is loaded as a client only. Its listen address stays empty, so ports 8555, 8889, and 8443 are not opened. The client dials AWS using ephemeral UDP. That is the accepted cloud dependency.
 
 Listeners on the host stack:
 
 | Socket | Address | Who can open it |
 | --- | --- | --- |
 | Web UI | `172.30.32.1:5080` | Supervisor ingress. Basic auth stays on. |
-| go2rtc API | `127.0.0.1:1984` | This host only. The hass module is not loaded, so the API is not also served on the hassio gateway. |
-| RTSP | `<default-route IPv4>:8554` | LAN clients of that address, with `STREAM_AUTH`. |
-| WebRTC, SRTP, RTMP | disabled | No listener. |
+| Internal shim | `127.0.0.1:5080` | `/internal/` only. go2rtc's `webrtc:` client fetches the KVS signaling URL here. |
+| go2rtc API | `127.0.0.1:1984` | This host only. The hass module is not loaded. |
+| RTSP | `192.168.1.70:8554` | LAN clients of that address, with `STREAM_AUTH`. |
+| WebRTC, SRTP, RTMP servers | disabled | No listener on 8555, 8889, or 8443. |
 
-Home Assistant Core's go2rtc already listens on `127.0.0.1:18554`, TCP `18555`, and port `11984`. This app does not use those ports. go2rtc skips RTSP auth for a connection from `127.0.0.1`, so RTSP is not bound there. Use the address printed at startup: `rtsp://<rtsp_username>:<rtsp_password>@<that-address>:8554/side_door`. Stop the previous app before updating so its published host port 8554 is released. A real camera test is still required.
+Home Assistant Core's go2rtc already listens on `127.0.0.1:18554`, TCP `18555`, and port `11984`. This app does not use those ports. go2rtc skips RTSP auth for a connection from `127.0.0.1`, so RTSP is not bound there. Use `rtsp://<rtsp_username>:<rtsp_password>@192.168.1.70:8554/side_door` and `.../garage_rear`. A real camera test is still required.
 
 An unmatched nickname is a discovery error and zero cameras. That is covered by `scripts/test-strict-filter.sh` on the patched source, not by a container run.
 

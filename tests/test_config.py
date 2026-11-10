@@ -15,7 +15,7 @@ APP = ROOT / "wyze_bridge_db3"
 def main() -> None:
     config = yaml.safe_load((APP / "config.yaml").read_text())
     assert config["slug"] == "wyze_bridge_db3"
-    assert config["version"] == "4.5.0-wyzedb3.4"
+    assert config["version"] == "4.5.0-wyzedb3.5"
     assert config["boot"] == "manual"
     assert config["init"] is False
     assert config["host_network"] is True
@@ -34,7 +34,7 @@ def main() -> None:
     config_text = (APP / "config.yaml").read_text()
     for published in ("1984/tcp", "5080/tcp", "8554/tcp", "8555/tcp", "8889/tcp", "8189/udp", "18554", "18555", "11984"):
         assert published not in config_text, published
-    assert config["options"] == {"filter_names": "Side door"}
+    assert config["options"] == {"filter_names": "Side door,Garage Rear"}
     schema = config["schema"]
     for key, kind in {
         "wyze_email": "email",
@@ -48,7 +48,13 @@ def main() -> None:
     }.items():
         assert schema[key] == kind, key
     assert schema["wyze_totp_key"] == "password?"
-    assert schema["filter_names"] == r"match(^[^,\r\n]+$)"
+    assert schema["filter_names"] == r"match(^[^,\r\n]+(?:,[^,\r\n]+)*$)"
+    name_re = re.compile(r"^[^,\r\n]+(?:,[^,\r\n]+)*$")
+    assert name_re.match(config["options"]["filter_names"])
+    assert name_re.match("Side door")
+    assert not name_re.match("Side door,")
+    assert not name_re.match(",Garage Rear")
+    assert not name_re.match("Side door,,Garage Rear")
     # Supervisor supervisor/apps/options.py RE_SCHEMA_ELEMENT. A value that
     # misses this pattern makes the app disappear from the store.
     schema_element = re.compile(
@@ -83,7 +89,7 @@ def main() -> None:
         "wyzedb3-a42e34e-pkg-tutk.patch",
         "strict-filter.patch",
         "host-listeners.patch",
-        "4.5.0+strict-filter+hostnet",
+        "4.5.0+strict-filter+hostnet+ldcfp",
         "iproute2",
     ):
         assert needle in dockerfile, needle
@@ -93,8 +99,10 @@ def main() -> None:
     assert "return nil" in strict
     assert "refusing to stream the unfiltered list" in strict
     assert "TestFilter_UnmatchedNameIsEmpty" in strict
+    assert "TestFilter_TwoExactNames" in strict
+    assert "TestFilter_PartialNameIsEmpty" in strict
     assert hashlib.sha256(strict.encode()).hexdigest() == (
-        "3f7652f21f9e228ee8cec7506d20b25b6573c089306791fb41f971935d1ac1e3"
+        "32ab5196f1d6205c12f2d93e9a326f58012635e7feec19eab88ee312bdac97d4"
     )
 
     code_patch = (APP / "patches/wyzedb3-a42e34e-pkg-tutk.patch").read_bytes()
@@ -122,8 +130,10 @@ def main() -> None:
         "172.30.32.1:5080",
         "127.0.0.1:18554",
         "safeRTSPListen",
-        '"api", "ws", "rtsp", "wyze"',
+        '"api", "ws", "rtsp", "webrtc", "wyze"',
         'Listen: ""',
+        'registerInternalRoutes',
+        'JoinHostPort("127.0.0.1"',
     ):
         assert needle in added, needle
     assert '"hass"' not in added
@@ -136,7 +146,7 @@ def main() -> None:
     ):
         assert unsafe not in added, unsafe
     assert hashlib.sha256(listeners).hexdigest() == (
-        "ef5bf78c24b8f7cbc8bf3fbb7c5b2081e73d8205c086e0e46e24e949a10b971a"
+        "6b89affb61b8a33b522a6df70e08e5b7b68c2c64bd5ea3ffe7a3f0d247b2ade5"
     )
 
     repo = yaml.safe_load((ROOT / "repository.yaml").read_text())
@@ -160,6 +170,8 @@ def main() -> None:
     assert 'BRIDGE_LISTEN_HOST="172.30.32.1"' in run
     assert "BRIDGE_PORT=5080" in run
     assert "WYZE_RTSP_LISTEN" in run
+    assert "192.168.1.70" in run
+    assert "empty camera nickname" in run
     assert "127.0.0.1:1984" in run
     assert "0.0.0.0:8554" not in run
     assert "0.0.0.0:1984" not in run

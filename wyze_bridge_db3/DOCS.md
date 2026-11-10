@@ -31,9 +31,11 @@ Home Assistant accepts a `!secret` reference in these fields. The Supervisor res
 
 The RTSP username cannot contain `:`, `@`, or `|`. The RTSP password cannot contain `@` or `|`. A colon inside the RTSP password is fine. The bridge parses `STREAM_AUTH` as `username:password`.
 
-## Side door only
+## Exact camera names
 
-`FILTER_NAMES` is the bridge's documented allow-list. The default is `Side door`. Matching is case-insensitive against the camera nickname. The startup script rejects a comma, so the option cannot list a second camera. Set the nickname to the single camera you intend to stream if the Wyze app does not call it exactly `Side door`.
+`FILTER_NAMES` is the bridge's documented allow-list. The default is `Side door,Garage Rear`. Matching is case-insensitive and exact against each camera nickname. A comma separates names. An empty piece, such as a trailing comma, is rejected before the bridge starts. A name that matches nothing is omitted. If the whole list matches nothing, discovery returns `camera filter matched 0 cameras; refusing to stream the unfiltered list` and no camera is registered.
+
+`Garage Rear` is the Wyze Cam Floodlight Pro, model `LD_CFP`. That model is a WebRTC streamer in docker-wyze-bridge v4.5.0. The bridge registers it as `webrtc:http://127.0.0.1:5080/internal/wyze/webrtc/<name>#format=wyze`. go2rtc then fetches a short-lived KVS signaling URL from the loopback shim and dials Wyze's cloud. `Side door` stays on the TUTK path. An existing install keeps its saved option until that option is changed to the two-name list.
 
 v4.5.0, and tag `v4.6.0-beta.1`, return every camera when that list matches nothing. There is no documented strict option. `patches/strict-filter.patch` changes `Apply` so a configured filter that matches nothing returns no cameras, and changes `Discover` so that case returns `camera filter matched 0 cameras; refusing to stream the unfiltered list`. The bridge then logs the discovery failure and does not register those cameras. This was unit-tested on the patched source. It was not run inside a container and not run against a Wyze account.
 
@@ -41,21 +43,21 @@ MQTT is not enabled. `MQTT_HOST` is cleared. Gwell discovery is off (`GWELL_ENAB
 
 ## Web UI and RTSP
 
-Version `4.5.0-wyzedb3.4` sets `host_network: true`. Supervisor then ignores any `ports:` map, so `patches/host-listeners.patch` and `run.sh` choose every listen address. The previous build, `4.5.0-wyzedb3.3`, published only `8554/tcp` through Docker NAT. An RTSP client reached that port and the bridge returned `wyze: connect failed: discovery timeout`. Host networking is the approved next test. It is not proof that Docker NAT caused the timeout, and it is not proof that the doorbell streams.
+Version `4.5.0-wyzedb3.5` sets `host_network: true`. Supervisor then ignores any `ports:` map, so `patches/host-listeners.patch` and `run.sh` choose every listen address.
 
-`run.sh` requires `172.30.32.1` on the host before it starts the bridge. That address is the Supervisor docker-network gateway (`172.30.32.0/23`, host index 1). Ingress connects to it. The Web UI then listens only on `172.30.32.1:5080`, with `BRIDGE_AUTH=true`. A browser on the camera LAN does not have a route to that address. Ingress still asks for the Home Assistant session, and the bridge still asks for its own username and password. Ingress is not an RTSP path.
+`run.sh` requires `172.30.32.1` on the host before it starts the bridge. That address is the Supervisor docker-network gateway (`172.30.32.0/23`, host index 1). Ingress connects to it. The Web UI listens on `172.30.32.1:5080`, with `BRIDGE_AUTH=true`. A second listener on `127.0.0.1:5080` serves only `/internal/`. go2rtc's WebRTC client calls `http://127.0.0.1:5080/internal/wyze/webrtc/<camera>` for an `LD_CFP` stream. `requireLoopback` still wraps those handlers, and the ingress listener does not treat a hassio-network client as loopback. The response can carry short-lived TURN credentials. It is not served on the LAN address.
 
-RTSP listens on the IPv4 source of the default route, port 8554, with `STREAM_AUTH`. `ip -4 route get 192.0.2.1` is a local route lookup against the documentation range; it does not send a packet. The startup log prints the chosen `address:8554`. Core, which shares the host network, opens `rtsp://<rtsp_username>:<rtsp_password>@<that-address>:8554/side_door` when the nickname is `Side door`. Percent-encode a colon inside the password in that URL. The normalized stream name is the nickname in lower case with spaces turned into underscores.
+RTSP listens on `192.168.1.70:8554` with `STREAM_AUTH`. Startup checks that this address is present on the host and does not substitute another interface. Core opens `rtsp://<rtsp_username>:<rtsp_password>@192.168.1.70:8554/side_door` and `rtsp://<rtsp_username>:<rtsp_password>@192.168.1.70:8554/garage_rear`. Percent-encode a colon inside the password in that URL. The normalized stream name is the nickname in lower case with spaces turned into underscores.
 
 go2rtc does not ask for RTSP credentials when the client address is `127.0.0.1`. This build therefore refuses to bind RTSP on loopback, on `0.0.0.0`, on link-local, or on `172.30.32.0/23`. `127.0.0.1:8554` has no listener. Home Assistant Core's own go2rtc already uses `127.0.0.1:18554` for RTSP, TCP `18555` for WebRTC, and port `11984` for its API. This app uses none of those.
 
-Stop the `4.5.0-wyzedb3.3` app before the update so Docker releases the old host port 8554. The new process binds only the default-route address, but a leftover publish of `0.0.0.0:8554` can still occupy the port.
+`192.168.1.70:8554` must be free before the new process binds it. A leftover publish of `0.0.0.0:8554` from an older app can still occupy the port.
 
 The RTSP username must be at least 8 characters and must not contain `:`, `@`, or `|`. The RTSP password must be at least 16 characters and must not contain `@` or `|`. Both are required, have no defaults, and the app exits before starting the bridge if they are missing or shorter. The schema uses `str(8,)` and `password(16,)`, and `run.sh` checks the same limits.
 
-go2rtc's API listens on `127.0.0.1:1984` and has no username in v4.5.0. The loaded modules are `api`, `ws`, `rtsp`, `wyze`, `ffmpeg`, `exec`, `http`, `mp4`, `hls`, and `mjpeg`. The `hass` module is left out because, for exactly `127.0.0.1:1984`, it would also serve that API on the hassio gateway. WebRTC (`:8555` and the old `:8889`), SRTP (`:8443`), and RTMP are left out, and their listen values are empty so a default port is not installed. Another process in this host network namespace can still open `127.0.0.1:1984`. An app that stays on the hassio bridge cannot. The Web UI stays on ingress plus `BRIDGE_AUTH`.
+go2rtc's API listens on `127.0.0.1:1984` and has no username in v4.5.0. The loaded modules are `api`, `ws`, `rtsp`, `webrtc`, `wyze`, `ffmpeg`, `exec`, `http`, `mp4`, `hls`, and `mjpeg`. The `hass` module is left out because, for exactly `127.0.0.1:1984`, it would also serve that API on the hassio gateway. The `webrtc` module is the client source (`webrtc:…#format=wyze`). Its `listen` value is empty. go2rtc v1.9.14 opens the TCP and UDP server mux only when that address is non-empty, so `:8555` and `:8889` are not bound. SRTP and RTMP stay unloaded, and their listen values are empty, so `:8443` is not bound. The KVS client still opens ephemeral UDP sockets toward AWS. Those are not stable published ports. Another process in this host network namespace can still open `127.0.0.1:1984` and `127.0.0.1:5080`. An app that stays on the hassio bridge cannot. The Web UI stays on ingress plus `BRIDGE_AUTH`.
 
-TUTK still opens ephemeral UDP sockets so the camera can answer discovery. Those sockets are the reason for host networking. They are not fixed published ports.
+TUTK still opens ephemeral UDP sockets so the doorbell can answer discovery. Those sockets are the reason for host networking. They are not fixed published ports.
 
 This app does not use `hassio_api`, `homeassistant_api`, the Docker socket, or the Home Assistant configuration folder. Wyze session files are written to `/data/wyze-bridge-state`. A backup of the app includes that directory and the options. Uninstalling the app deletes `/data`.
 
@@ -65,7 +67,8 @@ Logs are fixed at `info`. Trace logging in the bridge can include HTTP bodies, s
 
 No Wyze account, no camera, and no Home Assistant were available. The filter and go2rtc tests ran on source. The container image was not built.
 
-- `4.5.0-wyzedb3.3` registered the filtered doorbell and then returned `discovery timeout` on an RTSP request. Host networking in `4.5.0-wyzedb3.4` lets the camera's UDP reply reach the TUTK socket. Whether that clears the timeout still has to be tested on the real camera.
+- `LD_CFP` media and signaling go through Wyze's AWS KVS service. That cloud dependency was accepted for `Garage Rear`. The doorbell remains on TUTK. Neither path has been retested from this source change.
+- The KVS shim returns short-lived TURN credentials. It is bound to `127.0.0.1:5080` and still checks the peer address.
 - v4.5.0 cannot set a password on the go2rtc API. The API is bound to `127.0.0.1:1984` so the LAN does not see it. Any other host-network process on this machine can.
 - The upstream alternative with `GO2RTC_API_USERNAME` is pre-release `v4.6.0-beta.1` (`3354db51a028ef636790d7404d7b065f09406092`). That tag still fail-opens an unmatched nickname, so it does not replace `strict-filter.patch`. This package stays on v4.5.0 plus the two local patches.
 - The pull request's note says this doorbell's audio is PCML at 8 kHz and the sensor is mounted sideways. This package does not add a rotate step.

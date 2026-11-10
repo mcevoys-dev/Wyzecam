@@ -1,13 +1,14 @@
 name: Wyze Bridge DB3
-version: "4.5.0-wyzedb3.4"
+version: "4.5.0-wyzedb3.5"
 slug: wyze_bridge_db3
 description: >-
   Local stream bridge for one Wyze camera, built to carry the unreleased
   Wyze Video Doorbell v1 (WYZEDB3) go2rtc fix. Starts only after options
   are saved. Uses the host network so camera UDP replies can arrive.
   Web UI listens on the Supervisor gateway for ingress, with basic auth.
-  Authenticated RTSP listens on the default-route IPv4, port 8554.
-  The go2rtc API listens on localhost only. WebRTC is disabled.
+  Authenticated RTSP listens on 192.168.1.70 port 8554.
+  The go2rtc API listens on localhost only. The WebRTC client
+  can reach Wyze KVS. WebRTC, SRTP, and RTMP servers stay closed.
 url: https://github.com/IDisposable/docker-wyze-bridge
 stage: experimental
 arch:
@@ -27,7 +28,7 @@ panel_icon: mdi:doorbell
 panel_admin: true
 homeassistant: "2026.11.0"
 options:
-  filter_names: "Side door"
+  filter_names: "Side door,Garage Rear"
 schema:
   wyze_email: email
   wyze_password: password
@@ -38,4 +39,4 @@ schema:
   web_password: password
   rtsp_username: "str(8,)"
   rtsp_password: "password(16,)"
-  filter_names: 'match(^[^,\r\n]+$)'
+  filter_names: 'match(^[^,\r\n]+(?:,[^,\r\n]+)*$)'
