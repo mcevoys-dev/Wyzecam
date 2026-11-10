@@ -1,0 +1,64 @@
+--- a/pkg/webrtc/conn.go
++++ b/pkg/webrtc/conn.go
+@@ -87,13 +87,23 @@
+ 			}
+ 		}
+ 
+-		if c.Mode == core.ModePassiveProducer && remote.Kind() == webrtc.RTPCodecTypeVideo {
++		// Passive producers (WHIP/OBS) and active producers (KVS/Wyze
++		// client) both withhold a keyframe until asked. The KVS path
++		// sets ModeActiveProducer, so a Floodlight Pro can finish ICE
++		// and still emit no samples. Ask immediately, then every 2s.
++		if remote.Kind() == webrtc.RTPCodecTypeVideo &&
++			(c.Mode == core.ModePassiveProducer || c.Mode == core.ModeActiveProducer) {
+ 			go func() {
+ 				pkts := []rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(remote.SSRC())}}
+-				for range time.NewTicker(time.Second * 2).C {
++				ticker := time.NewTicker(2 * time.Second)
++				defer ticker.Stop()
++				for {
+ 					if err := pc.WriteRTCP(pkts); err != nil {
+ 						return
+ 					}
++					if _, ok := <-ticker.C; !ok {
++						return
++					}
+ 				}
+ 			}()
+ 		}
+--- a/internal/webrtc/kinesis.go
++++ b/internal/webrtc/kinesis.go
+@@ -173,6 +173,7 @@
+ 				if err = prod.SetAnswer(sd.SDP); err != nil {
+ 					break
+ 				}
++				logKVSNegotiation(prod)
+ 
+ 			case "ICE_CANDIDATE":
+ 				// 7. Continue to receiving candidates
+@@ -233,3 +234,25 @@
+ 
+ 	return kinesisClient(kvs.URL, query, "webrtc/wyze", nil)
+ }
++
++// logKVSNegotiation records the answer's media directions and codec
++// names. The SDP text and the signaling URL are not logged.
++func logKVSNegotiation(prod *webrtc.Conn) {
++	parts := make([]string, 0, len(prod.Medias))
++	for _, media := range prod.Medias {
++		if media == nil {
++			continue
++		}
++		parts = append(parts, media.String())
++	}
++	log.Info().Strs("medias", parts).Msg("[webrtc] kvs negotiated")
++	go func() {
++		time.Sleep(2 * time.Second)
++		bytes := prod.Recv
++		ev := log.Info()
++		if bytes == 0 {
++			ev = log.Warn()
++		}
++		ev.Int("bytes", bytes).Strs("medias", parts).Msg("[webrtc] kvs bytes")
++	}()
++}

@@ -1,0 +1,86 @@
+--- a/internal/go2rtcmgr/apiclient.go
++++ b/internal/go2rtcmgr/apiclient.go
+@@ -255,13 +255,58 @@
+ 	info := decodeProbe(name, body)
+ 	connected := 0
+ 	bytes := 0
++	tracks := 0
+ 	for _, prod := range info.Producers {
+ 		if prod.Connected() {
+ 			connected++
+ 		}
+ 		bytes += prod.Bytes()
++		tracks += len(prod.Receivers)
+ 	}
+-	return fmt.Sprintf("producers=%d connected=%d bytes=%d", len(info.Producers), connected, bytes), nil
++	codecs := RedactLog(mediaSummary(body))
++	return fmt.Sprintf("producers=%d connected=%d tracks=%d bytes=%d codecs=%s", len(info.Producers), connected, tracks, bytes, codecs), nil
++}
++
++func mediaSummary(body []byte) string {
++	var raw any
++	if err := json.Unmarshal(body, &raw); err != nil {
++		return ""
++	}
++	var parts []string
++	var walk func(any)
++	walk = func(v any) {
++		switch t := v.(type) {
++		case map[string]any:
++			if medias, ok := t["medias"].([]any); ok {
++				for _, media := range medias {
++					if s, ok := media.(string); ok && s != "" {
++						parts = append(parts, s)
++					}
++				}
++			}
++			for _, child := range t {
++				walk(child)
++			}
++		case []any:
++			for _, child := range t {
++				walk(child)
++			}
++		}
++	}
++	walk(raw)
++	seen := map[string]bool{}
++	out := make([]string, 0, len(parts))
++	for _, part := range parts {
++		if seen[part] {
++			continue
++		}
++		seen[part] = true
++		out = append(out, part)
++		if len(out) == 8 {
++			break
++		}
++	}
++	return strings.Join(out, "; ")
+ }
+ 
+ func decodeProbe(name string, body []byte) StreamInfo {
+--- a/internal/camera/manager.go
++++ b/internal/camera/manager.go
+@@ -4,6 +4,7 @@
+ 	"context"
+ 	"fmt"
+ 	"sort"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -325,8 +326,11 @@
+ 				Msg("go2rtc source state")
+ 			return
+ 		}
+-		m.log.Info().
+-			Str("cam", cam.Name()).
++		ev := m.log.Info()
++		if strings.Contains(state, "bytes=0") {
++			ev = m.log.Warn()
++		}
++		ev.Str("cam", cam.Name()).
+ 			Str("protocol", protocol).
+ 			Str("state", state).
+ 			Msg("go2rtc source state")
