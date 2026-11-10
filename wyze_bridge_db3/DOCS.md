@@ -43,7 +43,7 @@ MQTT is not enabled. `MQTT_HOST` is cleared. Gwell discovery is off (`GWELL_ENAB
 
 ## Web UI and RTSP
 
-Version `4.5.0-wyzedb3.5` sets `host_network: true`. Supervisor then ignores any `ports:` map, so `patches/host-listeners.patch` and `run.sh` choose every listen address.
+Version `4.5.0-wyzedb3.6` sets `host_network: true`. Supervisor then ignores any `ports:` map, so `patches/host-listeners.patch` and `run.sh` choose every listen address.
 
 `run.sh` requires `172.30.32.1` on the host before it starts the bridge. That address is the Supervisor docker-network gateway (`172.30.32.0/23`, host index 1). Ingress connects to it. The Web UI listens on `172.30.32.1:5080`, with `BRIDGE_AUTH=true`. A second listener on `127.0.0.1:5080` serves only `/internal/`. go2rtc's WebRTC client calls `http://127.0.0.1:5080/internal/wyze/webrtc/<camera>` for an `LD_CFP` stream. `requireLoopback` still wraps those handlers, and the ingress listener does not treat a hassio-network client as loopback. The response can carry short-lived TURN credentials. It is not served on the LAN address.
 
@@ -67,7 +67,8 @@ Logs are fixed at `info`. Trace logging in the bridge can include HTTP bodies, s
 
 No Wyze account, no camera, and no Home Assistant were available. The filter and go2rtc tests ran on source. The container image was not built.
 
-- `LD_CFP` media and signaling go through Wyze's AWS KVS service. That cloud dependency was accepted for `Garage Rear`. The doorbell remains on TUTK. Neither path has been retested from this source change.
+- `4.5.0-wyzedb3.5` registered `Garage Rear` as streaming and then delivered no media. The shim labeled ICE servers `url`. go2rtc v1.9.14 reads `urls` and otherwise builds peer connections with no STUN or TURN servers, so a KVS camera cannot complete ICE. `4.5.0-wyzedb3.6` sends `urls`. A failed dial is logged as `go2rtc source state` with the error text after URL queries are removed.
+- `LD_CFP` media and signaling still go through Wyze's AWS KVS service. The doorbell remains on TUTK. This source change was not run against a camera.
 - The KVS shim returns short-lived TURN credentials. It is bound to `127.0.0.1:5080` and still checks the peer address.
 - v4.5.0 cannot set a password on the go2rtc API. The API is bound to `127.0.0.1:1984` so the LAN does not see it. Any other host-network process on this machine can.
 - The upstream alternative with `GO2RTC_API_USERNAME` is pre-release `v4.6.0-beta.1` (`3354db51a028ef636790d7404d7b065f09406092`). That tag still fail-opens an unmatched nickname, so it does not replace `strict-filter.patch`. This package stays on v4.5.0 plus the two local patches.

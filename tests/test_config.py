@@ -15,7 +15,7 @@ APP = ROOT / "wyze_bridge_db3"
 def main() -> None:
     config = yaml.safe_load((APP / "config.yaml").read_text())
     assert config["slug"] == "wyze_bridge_db3"
-    assert config["version"] == "4.5.0-wyzedb3.5"
+    assert config["version"] == "4.5.0-wyzedb3.6"
     assert config["boot"] == "manual"
     assert config["init"] is False
     assert config["host_network"] is True
@@ -89,7 +89,8 @@ def main() -> None:
         "wyzedb3-a42e34e-pkg-tutk.patch",
         "strict-filter.patch",
         "host-listeners.patch",
-        "4.5.0+strict-filter+hostnet+ldcfp",
+        "4.5.0+strict-filter+hostnet+kvs",
+        "kvs-ice-urls.patch",
         "iproute2",
     ):
         assert needle in dockerfile, needle
@@ -147,6 +148,22 @@ def main() -> None:
         assert unsafe not in added, unsafe
     assert hashlib.sha256(listeners).hexdigest() == (
         "6b89affb61b8a33b522a6df70e08e5b7b68c2c64bd5ea3ffe7a3f0d247b2ade5"
+    )
+
+    kvs = (APP / "patches/kvs-ice-urls.patch").read_text()
+    kvs_added = "\n".join(
+        line[1:]
+        for line in kvs.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    assert 'json:"urls"' in kvs_added
+    assert 'json:"url"' not in kvs_added
+    assert "DescribeSource" in kvs_added
+    assert "go2rtc source state" in kvs_added
+    assert "RedactLog" in kvs_added
+    assert "X-Amz-Security-Token" not in kvs_added or "TestRedactLog" in kvs_added
+    assert hashlib.sha256(kvs.encode()).hexdigest() == (
+        "09414081a4e8a020213650ca27b24cf7f0e95061c62b68a28bd4457675b69443"
     )
 
     repo = yaml.safe_load((ROOT / "repository.yaml").read_text())
