@@ -16,12 +16,13 @@ wyze_bridge_db3/
   PROVENANCE.md
   translations/en.yaml
   patches/strict-filter.patch
+  patches/host-listeners.patch
   patches/wyzedb3-a42e34e-pkg-tutk.patch
   patches/UPSTREAM-a42e34e.diff
   LICENSES/
 ```
 
-`config.yaml` is `boot: manual`, `arch: [amd64]`, `host_network: false`, and ingress on port 5080. The only default option is `filter_names: Side door`. Account, API, web, and RTSP values have no defaults. `run.sh` exits if any required value is empty, and it does not print those values.
+`config.yaml` is `boot: manual`, `arch: [amd64]`, `host_network: true`, and ingress on port 5080. The only default option is `filter_names: Side door`. Account, API, web, and RTSP values have no defaults. `run.sh` exits if any required value is empty, and it does not print those values. With host networking, Supervisor ignores `ports:`. `patches/host-listeners.patch` chooses the sockets instead.
 
 There is no `image:` key. Nothing is pushed to a registry. After a repository is added, Supervisor builds the Dockerfile on the Home Assistant machine.
 
@@ -84,9 +85,18 @@ bash tests/test_run.sh
 
 No Wyze login, no camera, and no Home Assistant were available. Unit tests cover the strict filter and the go2rtc packet and DTLS changes. They do not show that a doorbell streamed. The app container was not built; this environment has no Docker daemon.
 
-The bridge README says older TUTK doorbells often need host networking because Docker NAT drops the camera's UDP reply. Host port 8554 does not fix that. This app leaves host networking off and does not move to the 4.6 beta. A real camera test is still required.
+Version `4.5.0-wyzedb3.4` uses the host network so a TUTK UDP reply can reach the bridge. That is the approved test for the `discovery timeout` seen on `4.5.0-wyzedb3.3`. It does not prove Docker NAT was the cause, and it does not prove the doorbell will stream.
 
-The install config maps only `8554/tcp` to host port 8554. Core uses the host network, so it can open `rtsp://<rtsp_username>:<rtsp_password>@<home-assistant-host>:8554/side_door` for the nickname `Side door`. Confirm that host port is free before install. The go2rtc API is not mapped.
+Listeners on the host stack:
+
+| Socket | Address | Who can open it |
+| --- | --- | --- |
+| Web UI | `172.30.32.1:5080` | Supervisor ingress. Basic auth stays on. |
+| go2rtc API | `127.0.0.1:1984` | This host only. The hass module is not loaded, so the API is not also served on the hassio gateway. |
+| RTSP | `<default-route IPv4>:8554` | LAN clients of that address, with `STREAM_AUTH`. |
+| WebRTC, SRTP, RTMP | disabled | No listener. |
+
+Home Assistant Core's go2rtc already listens on `127.0.0.1:18554`, TCP `18555`, and port `11984`. This app does not use those ports. go2rtc skips RTSP auth for a connection from `127.0.0.1`, so RTSP is not bound there. Use the address printed at startup: `rtsp://<rtsp_username>:<rtsp_password>@<that-address>:8554/side_door`. Stop the previous app before updating so its published host port 8554 is released. A real camera test is still required.
 
 An unmatched nickname is a discovery error and zero cameras. That is covered by `scripts/test-strict-filter.sh` on the patched source, not by a container run.
 

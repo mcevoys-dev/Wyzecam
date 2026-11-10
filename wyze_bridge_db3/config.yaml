@@ -1,11 +1,13 @@
 name: Wyze Bridge DB3
-version: "4.5.0-wyzedb3.3"
+version: "4.5.0-wyzedb3.4"
 slug: wyze_bridge_db3
 description: >-
   Local stream bridge for one Wyze camera, built to carry the unreleased
   Wyze Video Doorbell v1 (WYZEDB3) go2rtc fix. Starts only after options
-  are saved. Web UI stays on Home Assistant ingress. Authenticated RTSP
-  is mapped to host port 8554 by default. The go2rtc API is not mapped.
+  are saved. Uses the host network so camera UDP replies can arrive.
+  Web UI listens on the Supervisor gateway for ingress, with basic auth.
+  Authenticated RTSP listens on the default-route IPv4, port 8554.
+  The go2rtc API listens on localhost only. WebRTC is disabled.
 url: https://github.com/IDisposable/docker-wyze-bridge
 stage: experimental
 arch:
@@ -13,7 +15,7 @@ arch:
 startup: application
 boot: manual
 init: false
-host_network: false
+host_network: true
 homeassistant_api: false
 hassio_api: false
 auth_api: false
@@ -24,10 +26,6 @@ ingress_port: 5080
 panel_icon: mdi:doorbell
 panel_admin: true
 homeassistant: "2026.11.0"
-ports:
-  "8554/tcp": 8554
-ports_description:
-  "8554/tcp": Authenticated RTSP for Home Assistant Core. Default host port 8554. Confirm it is free before install. No other service port is mapped.
 options:
   filter_names: "Side door"
 schema:

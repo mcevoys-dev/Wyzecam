@@ -41,19 +41,23 @@ MQTT is not enabled. `MQTT_HOST` is cleared. Gwell discovery is off (`GWELL_ENAB
 
 ## Web UI and RTSP
 
-The Web UI listens on container port 5080 and is not published on the host. Ingress is the documented way to open it in a browser: Home Assistant checks the session, and the Supervisor proxies to the app. The bridge also has basic auth (`BRIDGE_AUTH=true`). Ingress is not an RTSP path.
+Version `4.5.0-wyzedb3.4` sets `host_network: true`. Supervisor then ignores any `ports:` map, so `patches/host-listeners.patch` and `run.sh` choose every listen address. The previous build, `4.5.0-wyzedb3.3`, published only `8554/tcp` through Docker NAT. An RTSP client reached that port and the bridge returned `wyze: connect failed: discovery timeout`. Host networking is the approved next test. It is not proof that Docker NAT caused the timeout, and it is not proof that the doorbell streams.
 
-RTSP listens on container port 8554 with `STREAM_AUTH`. The app config maps that container port to host port 8554 by default (`8554/tcp: 8554`). Confirm host port 8554 is free before install. If it is taken, change only that host port on the app's Network page before starting; do not add any other port. This is Supervisor port mapping onto the Home Assistant host, the same kind of LAN RTSP already used for Back Yard. It is not a router or firewall change. RTSP on this port is authenticated and is not wrapped in TLS.
+`run.sh` requires `172.30.32.1` on the host before it starts the bridge. That address is the Supervisor docker-network gateway (`172.30.32.0/23`, host index 1). Ingress connects to it. The Web UI then listens only on `172.30.32.1:5080`, with `BRIDGE_AUTH=true`. A browser on the camera LAN does not have a route to that address. Ingress still asks for the Home Assistant session, and the bridge still asks for its own username and password. Ingress is not an RTSP path.
 
-Home Assistant Core runs on the host network, so a mapped host port is how Core reaches the stream: `rtsp://<rtsp_username>:<rtsp_password>@<home-assistant-host>:8554/side_door` when the nickname is `Side door`. Percent-encode a colon inside the password in that URL. The normalized stream name is the nickname in lower case with spaces turned into underscores.
+RTSP listens on the IPv4 source of the default route, port 8554, with `STREAM_AUTH`. `ip -4 route get 192.0.2.1` is a local route lookup against the documentation range; it does not send a packet. The startup log prints the chosen `address:8554`. Core, which shares the host network, opens `rtsp://<rtsp_username>:<rtsp_password>@<that-address>:8554/side_door` when the nickname is `Side door`. Percent-encode a colon inside the password in that URL. The normalized stream name is the nickname in lower case with spaces turned into underscores.
 
-Other apps on `172.30.32.0/23` can still use `{repository}-wyze-bridge-db3:8554`. The repository id is the first 8 hex characters of the SHA-1 of the lowercased Git URL. Clearing the host port in the app Network page unpublishes it again; Core then has no documented path to the stream.
+go2rtc does not ask for RTSP credentials when the client address is `127.0.0.1`. This build therefore refuses to bind RTSP on loopback, on `0.0.0.0`, on link-local, or on `172.30.32.0/23`. `127.0.0.1:8554` has no listener. Home Assistant Core's own go2rtc already uses `127.0.0.1:18554` for RTSP, TCP `18555` for WebRTC, and port `11984` for its API. This app uses none of those.
+
+Stop the `4.5.0-wyzedb3.3` app before the update so Docker releases the old host port 8554. The new process binds only the default-route address, but a leftover publish of `0.0.0.0:8554` can still occupy the port.
 
 The RTSP username must be at least 8 characters and must not contain `:`, `@`, or `|`. The RTSP password must be at least 16 characters and must not contain `@` or `|`. Both are required, have no defaults, and the app exits before starting the bridge if they are missing or shorter. The schema uses `str(8,)` and `password(16,)`, and `run.sh` checks the same limits.
 
-go2rtc's API on container port 1984 is not in `ports` and `host_network` is false, so that API is not mapped onto the host. Another app on the internal network can still open it, because v4.5.0 cannot set a username on it. `/api/health` and `/metrics.prom` are unauthenticated at the bridge and are also unmapped. The Web UI stays on ingress plus `BRIDGE_AUTH`. Ingress is not RTSP.
+go2rtc's API listens on `127.0.0.1:1984` and has no username in v4.5.0. The loaded modules are `api`, `ws`, `rtsp`, `wyze`, `ffmpeg`, `exec`, `http`, `mp4`, `hls`, and `mjpeg`. The `hass` module is left out because, for exactly `127.0.0.1:1984`, it would also serve that API on the hassio gateway. WebRTC (`:8555` and the old `:8889`), SRTP (`:8443`), and RTMP are left out, and their listen values are empty so a default port is not installed. Another process in this host network namespace can still open `127.0.0.1:1984`. An app that stays on the hassio bridge cannot. The Web UI stays on ingress plus `BRIDGE_AUTH`.
 
-This app does not use host networking, `hassio_api`, `homeassistant_api`, the Docker socket, or the Home Assistant configuration folder. Wyze session files are written to `/data/wyze-bridge-state`. A backup of the app includes that directory and the options. Uninstalling the app deletes `/data`.
+TUTK still opens ephemeral UDP sockets so the camera can answer discovery. Those sockets are the reason for host networking. They are not fixed published ports.
+
+This app does not use `hassio_api`, `homeassistant_api`, the Docker socket, or the Home Assistant configuration folder. Wyze session files are written to `/data/wyze-bridge-state`. A backup of the app includes that directory and the options. Uninstalling the app deletes `/data`.
 
 Logs are fixed at `info`. Trace logging in the bridge can include HTTP bodies, so this app does not offer a log-level option.
 
@@ -61,8 +65,9 @@ Logs are fixed at `info`. Trace logging in the bridge can include HTTP bodies, s
 
 No Wyze account, no camera, and no Home Assistant were available. The filter and go2rtc tests ran on source. The container image was not built.
 
-- The upstream README says TUTK doorbells can fail inside Docker NAT, with ICMP "port unreachable" on the camera's UDP reply, and it tells operators to use host networking. Mapping host port 8554 does not change that. This app leaves host networking off. Whether the doorbell actually streams still has to be tested on the real camera. v4.5.0 would expose the unauthenticated go2rtc API on every host interface if host networking were turned on.
-- The smaller upstream alternative, not taken here, is pre-release `v4.6.0-beta.1` (`3354db51a028ef636790d7404d7b065f09406092`). It adds `GO2RTC_API_USERNAME` and `GO2RTC_API_PASSWORD`, so a later host-network choice could require a password on port 1984. That tag still fail-opens an unmatched nickname, so it does not replace `strict-filter.patch`. Switching to it would be a new bridge revision, not a one-line change, and host networking would still publish RTSP and WebRTC on the host. This package does not do that.
+- `4.5.0-wyzedb3.3` registered the filtered doorbell and then returned `discovery timeout` on an RTSP request. Host networking in `4.5.0-wyzedb3.4` lets the camera's UDP reply reach the TUTK socket. Whether that clears the timeout still has to be tested on the real camera.
+- v4.5.0 cannot set a password on the go2rtc API. The API is bound to `127.0.0.1:1984` so the LAN does not see it. Any other host-network process on this machine can.
+- The upstream alternative with `GO2RTC_API_USERNAME` is pre-release `v4.6.0-beta.1` (`3354db51a028ef636790d7404d7b065f09406092`). That tag still fail-opens an unmatched nickname, so it does not replace `strict-filter.patch`. This package stays on v4.5.0 plus the two local patches.
 - The pull request's note says this doorbell's audio is PCML at 8 kHz and the sensor is mounted sideways. This package does not add a rotate step.
 - v4.5.0 can promote a TUTK camera to WebRTC after repeated failures (`TUTK_FALLBACK_THRESHOLD`, default 5). That behavior is unchanged.
 - linux/amd64 is the only architecture in `arch`. An arm64 go2rtc binary was cross-compiled once and not run.
