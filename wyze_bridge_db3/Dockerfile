@@ -36,12 +36,12 @@ RUN curl -fsSL -o /tmp/bridge.tar.gz \
     && patch -p1 --forward --input=/tmp/strict-filter.patch \
     && patch -p1 --forward --input=/tmp/host-listeners.patch \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-       go build -trimpath -buildvcs=false -ldflags '-s -w -X main.Version=4.5.0+strict-filter+hostnet' \
+       go build -trimpath -buildvcs=false -ldflags '-s -w -X main.Version=4.5.0+strict-filter+hostnet+ldcfp' \
        -o /out/wyze-bridge ./cmd/wyze-bridge
 
 FROM ghcr.io/home-assistant/base@sha256:ed340acf0a3a77a761b4d3ee2977ab5ddc44038304597e66b0ccfd859b8d8a1f
 ARG BUILD_ARCH=amd64
-ARG BUILD_VERSION=4.5.0-wyzedb3.4
+ARG BUILD_VERSION=4.5.0-wyzedb3.5
 LABEL io.hass.arch="${BUILD_ARCH}" \
       io.hass.type="app" \
       io.hass.version="${BUILD_VERSION}" \
@@ -50,7 +50,7 @@ LABEL io.hass.arch="${BUILD_ARCH}" \
       org.opencontainers.image.licenses="AGPL-3.0-only AND MIT" \
       org.opencontainers.image.source="https://github.com/IDisposable/docker-wyze-bridge" \
       org.opencontainers.image.revision="da56b956b9bfb8f426f8c2efda71f8f2851e76b8" \
-      org.opencontainers.image.version="4.5.0-wyzedb3.4" \
+      org.opencontainers.image.version="4.5.0-wyzedb3.5" \
       com.wyzebridge.go2rtc.base="b5948cfb25404cc5cb37b166ecaa2dca20b11d4b" \
       com.wyzebridge.go2rtc.patch="a42e34e431e17e37e82e3bd988db43056e8b8d57" \
       com.wyzebridge.go2rtc.patch.status="unreleased" \

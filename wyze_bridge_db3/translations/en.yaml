@@ -48,5 +48,6 @@ configuration:
   filter_names:
     name: Camera nickname
     description: >-
-      FILTER_NAMES. One Wyze nickname. The default is Side door, matched
-      without case sensitivity. A comma is rejected so the list cannot grow.
+      FILTER_NAMES. Comma-separated exact nicknames, for example
+      Side door,Garage Rear. Matching ignores case. An unknown name
+      adds no camera. A list that matches nothing streams nothing.

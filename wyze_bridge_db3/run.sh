@@ -89,15 +89,39 @@ fi
 if ((${#rtsp_password} < 16)); then
   fail "rtsp_password must be at least 16 characters. No bridge process was started."
 fi
-case "${filter_names}" in
-  *,*)
-    fail "filter_names must be one camera nickname. No bridge process was started."
-    ;;
-esac
+# Comma-separated exact nicknames. Empty segments are refused. The bridge
+# uppercases and trims each name, then keeps only exact matches. A list
+# that matches nothing does not fall open to the rest of the account.
+# read -ra drops a trailing empty field, so split by hand.
+filter_parts=()
+filter_rest="${filter_names}"
+while true; do
+  if [[ "${filter_rest}" != *","* ]]; then
+    filter_parts+=("${filter_rest}")
+    break
+  fi
+  filter_parts+=("${filter_rest%%,*}")
+  filter_rest="${filter_rest#*,}"
+  if [[ -z "${filter_rest}" ]]; then
+    filter_parts+=("")
+    break
+  fi
+done
+if ((${#filter_parts[@]} == 0)); then
+  fail "filter_names is empty. No bridge process was started."
+fi
+for part in "${filter_parts[@]}"; do
+  trimmed="${part#"${part%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+  if [[ -z "${trimmed}" ]]; then
+    fail "filter_names has an empty camera nickname. No bridge process was started."
+  fi
+done
 
 # Host network has no docker port map. Choose listeners before the bridge
 # starts. WYZE_RTSP_BIND_IP is a test hook, not a saved app option.
-# 192.0.2.1 is the documentation range used only as a route-lookup target.
+# Production RTSP stays on 192.168.1.70. Loopback, 0.0.0.0, link-local,
+# and 172.30.32.0/23 are still refused below.
 is_safe_rtsp_ipv4() {
   local ip="$1"
   [[ "${ip}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
@@ -128,22 +152,23 @@ ingress_gateway_present() {
   ip -4 -o addr show | awk '{split($4, a, "/"); if (a[1] == "172.30.32.1") found = 1} END {exit !found}'
 }
 
-default_route_ipv4() {
+rtsp_address_present() {
+  local want="$1"
   command -v ip >/dev/null 2>&1 || return 1
-  ip -4 route get 192.0.2.1 2>/dev/null | awk '{
-    for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }
-  }'
+  ip -4 -o addr show | awk -v want="${want}" '{split($4, a, "/"); if (a[1] == want) found = 1} END {exit !found}'
 }
 
-rtsp_ip="${WYZE_RTSP_BIND_IP:-}"
-if [[ -z "${rtsp_ip}" ]]; then
+rtsp_ip="${WYZE_RTSP_BIND_IP:-192.168.1.70}"
+if [[ -z "${WYZE_RTSP_BIND_IP:-}" ]]; then
   if ! command -v ip >/dev/null 2>&1; then
     fail "iproute2 is missing. No bridge process was started."
   fi
   if ! ingress_gateway_present; then
     fail "172.30.32.1 is not a local address, so ingress cannot reach the WebUI. No bridge process was started."
   fi
-  rtsp_ip="$(default_route_ipv4 || true)"
+  if ! rtsp_address_present "${rtsp_ip}"; then
+    fail "192.168.1.70 is not a local address. RTSP was not moved to another interface. No bridge process was started."
+  fi
 fi
 if ! is_safe_rtsp_ipv4 "${rtsp_ip}"; then
   fail "RTSP would not be bound to one LAN IPv4 on port 8554. Loopback, 0.0.0.0, link-local, and 172.30.32.0/23 are refused. No bridge process was started."
@@ -184,7 +209,7 @@ mkdir -p "${STATE_DIR}"
 unset wyze_email wyze_password wyze_api_id wyze_api_key wyze_totp_key
 unset web_username web_password rtsp_username rtsp_password
 
-log_info "Starting wyze-bridge. Camera filter is a single nickname. Web UI is ingress plus basic auth on 172.30.32.1:5080. RTSP auth is on ${WYZE_RTSP_LISTEN}. go2rtc API is 127.0.0.1:1984 only. WebRTC is off. MQTT and Gwell are off."
+log_info "Starting wyze-bridge. Camera filter is an exact nickname list. Web UI is ingress plus basic auth on 172.30.32.1:5080. Internal shim is 127.0.0.1:5080. RTSP auth is on ${WYZE_RTSP_LISTEN}. go2rtc API is 127.0.0.1:1984 only. WebRTC server ports are off. MQTT and Gwell are off."
 
 BIN="${WYZE_BRIDGE_BIN:-/usr/local/bin/wyze-bridge}"
 if [[ ! -x "${BIN}" ]]; then
