@@ -85,7 +85,7 @@ bash tests/test_run.sh
 
 No Wyze login, no camera, and no Home Assistant were available. Unit tests cover the strict filter and the go2rtc packet and DTLS changes. They do not show that a doorbell streamed. The app container was not built; this environment has no Docker daemon.
 
-Version `4.5.0-wyzedb3.5` keeps host networking and adds a second exact nickname for the Floodlight Pro (`LD_CFP`, `Garage Rear`). That model uses Wyze's cloud KVS WebRTC path. The go2rtc WebRTC module is loaded as a client only. Its listen address stays empty, so ports 8555, 8889, and 8443 are not opened. The client dials AWS using ephemeral UDP. That is the accepted cloud dependency.
+Version `4.5.0-wyzedb3.6` keeps that host-network layout. The Floodlight Pro (`LD_CFP`) uses Wyze's cloud KVS path. The shim now sends each ICE server as `urls`, which is the field go2rtc reads. With `url`, pion kept only host candidates and the floodlight produced no media. Ports 8555, 8889, and 8443 stay closed. The client still uses ephemeral UDP toward AWS.
 
 Listeners on the host stack:
 

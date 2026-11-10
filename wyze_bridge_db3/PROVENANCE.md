@@ -129,7 +129,9 @@ Bridge filter, with Go 1.26.4 on linux/amd64, after `strict-filter.patch` on the
 
 `tests/test_run.sh` checked startup with a fake bridge. It does not exercise the filter; that is the Go test above.
 
-## Host listeners and LD_CFP, v4.5.0-wyzedb3.5
+## Host listeners and LD_CFP, v4.5.0-wyzedb3.6
+
+`patches/kvs-ice-urls.patch` sha256 `09414081a4e8a020213650ca27b24cf7f0e95061c62b68a28bd4457675b69443` is applied after the listener patch. It changes the shim's ICE JSON key from `url` to `urls` and logs a redacted go2rtc probe (`go2rtc source state`) after a WebRTC source is registered. The probe error text has URL queries and userinfo removed.
 
 `patches/strict-filter.patch` sha256 `32ab5196f1d6205c12f2d93e9a326f58012635e7feec19eab88ee312bdac97d4` keeps an unmatched name list empty and adds `TestFilter_TwoExactNames` and `TestFilter_PartialNameIsEmpty`.
 
