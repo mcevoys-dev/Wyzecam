@@ -109,6 +109,12 @@ if os.environ.get("WYZE_TOTP_KEY", "") != "":
     sys.exit(12)
 if not os.path.isdir(os.environ["STATE_DIR"]):
     sys.exit(13)
+if os.environ.get("WYZE_RTSP_LISTEN") != "192.0.2.10:8554":
+    sys.exit(14)
+if os.environ.get("BRIDGE_LISTEN_HOST") != "172.30.32.1":
+    sys.exit(15)
+if os.environ.get("BRIDGE_PORT") != "5080":
+    sys.exit(16)
 print("bridge-env-ok")
 EOF
 chmod 0755 "${TMP}/fake-bridge"
@@ -131,6 +137,7 @@ run_case ready 0 \
   OPTIONS_JSON="${TMP}/ready.json" \
   WYZE_BRIDGE_BIN="${TMP}/fake-bridge" \
   WYZE_STATE_DIR="${TMP}/state-ready" \
+  WYZE_RTSP_BIND_IP="192.0.2.10" \
   EXPECT_EMAIL="${SECRET_EMAIL}" \
   EXPECT_PASSWORD="${SECRET_PASSWORD}" \
   EXPECT_API_ID="${SECRET_API_ID}" \
@@ -159,6 +166,7 @@ run_case colon 0 \
   OPTIONS_JSON="${TMP}/colon.json" \
   WYZE_BRIDGE_BIN="${TMP}/fake-bridge" \
   WYZE_STATE_DIR="${TMP}/state-colon" \
+  WYZE_RTSP_BIND_IP="192.0.2.10" \
   EXPECT_EMAIL="${SECRET_EMAIL}" \
   EXPECT_PASSWORD="${SECRET_PASSWORD}" \
   EXPECT_API_ID="${SECRET_API_ID}" \
@@ -194,5 +202,27 @@ pathlib.Path("${TMP}/short-user.json").write_text(json.dumps(doc))
 EOF
 run_case shortuser 1 OPTIONS_JSON="${TMP}/short-user.json"
 grep -q "at least 8 characters" "${TMP}/shortuser.log"
+
+for bad_ip in 127.0.0.1 0.0.0.0 172.30.32.1 172.30.33.10 169.254.1.1; do
+  run_case "bind-${bad_ip}" 1 \
+    OPTIONS_JSON="${TMP}/ready.json" \
+    WYZE_BRIDGE_BIN="${TMP}/fake-bridge" \
+    WYZE_RTSP_BIND_IP="${bad_ip}"
+  grep -q "one LAN IPv4" "${TMP}/bind-${bad_ip}.log"
+done
+
+if ! command -v ip >/dev/null 2>&1; then
+  run_case noip 1 \
+    OPTIONS_JSON="${TMP}/ready.json" \
+    WYZE_BRIDGE_BIN="${TMP}/fake-bridge"
+  grep -q "iproute2 is missing" "${TMP}/noip.log"
+elif ip -4 -o addr show | awk '{split($4, a, "/"); if (a[1] == "172.30.32.1") found = 1} END {exit !found}'; then
+  echo "ingress gateway present; skip missing-gateway case"
+else
+  run_case noingress 1 \
+    OPTIONS_JSON="${TMP}/ready.json" \
+    WYZE_BRIDGE_BIN="${TMP}/fake-bridge"
+  grep -q "172.30.32.1 is not a local address" "${TMP}/noingress.log"
+fi
 
 echo "run.sh checks passed"

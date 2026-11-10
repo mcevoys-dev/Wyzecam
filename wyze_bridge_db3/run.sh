@@ -95,6 +95,60 @@ case "${filter_names}" in
     ;;
 esac
 
+# Host network has no docker port map. Choose listeners before the bridge
+# starts. WYZE_RTSP_BIND_IP is a test hook, not a saved app option.
+# 192.0.2.1 is the documentation range used only as a route-lookup target.
+is_safe_rtsp_ipv4() {
+  local ip="$1"
+  [[ "${ip}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}"
+  local n
+  for n in "${a}" "${b}" "${c}" "${d}"; do
+    if ((10#${n} > 255)); then
+      return 1
+    fi
+  done
+  if ((10#${a} == 0 && 10#${b} == 0 && 10#${c} == 0 && 10#${d} == 0)); then
+    return 1
+  fi
+  if ((10#${a} == 127)); then
+    return 1
+  fi
+  if ((10#${a} == 169 && 10#${b} == 254)); then
+    return 1
+  fi
+  if ((10#${a} == 172 && 10#${b} == 30 && (10#${c} == 32 || 10#${c} == 33))); then
+    return 1
+  fi
+  return 0
+}
+
+ingress_gateway_present() {
+  command -v ip >/dev/null 2>&1 || return 1
+  ip -4 -o addr show | awk '{split($4, a, "/"); if (a[1] == "172.30.32.1") found = 1} END {exit !found}'
+}
+
+default_route_ipv4() {
+  command -v ip >/dev/null 2>&1 || return 1
+  ip -4 route get 192.0.2.1 2>/dev/null | awk '{
+    for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }
+  }'
+}
+
+rtsp_ip="${WYZE_RTSP_BIND_IP:-}"
+if [[ -z "${rtsp_ip}" ]]; then
+  if ! command -v ip >/dev/null 2>&1; then
+    fail "iproute2 is missing. No bridge process was started."
+  fi
+  if ! ingress_gateway_present; then
+    fail "172.30.32.1 is not a local address, so ingress cannot reach the WebUI. No bridge process was started."
+  fi
+  rtsp_ip="$(default_route_ipv4 || true)"
+fi
+if ! is_safe_rtsp_ipv4 "${rtsp_ip}"; then
+  fail "RTSP would not be bound to one LAN IPv4 on port 8554. Loopback, 0.0.0.0, link-local, and 172.30.32.0/23 are refused. No bridge process was started."
+fi
+
 export WYZE_EMAIL="${wyze_email}"
 export WYZE_PASSWORD="${wyze_password}"
 export WYZE_API_ID="${wyze_api_id}"
@@ -110,6 +164,9 @@ export BRIDGE_PASSWORD="${web_password}"
 export STREAM_AUTH="${rtsp_username}:${rtsp_password}"
 export FILTER_NAMES="${filter_names}"
 export FILTER_BLOCKS=false
+export WYZE_RTSP_LISTEN="${rtsp_ip}:8554"
+export BRIDGE_LISTEN_HOST="172.30.32.1"
+export BRIDGE_PORT=5080
 export GWELL_ENABLED=false
 export MQTT_ENABLED=false
 unset MQTT_HOST MQTT_USERNAME MQTT_PASSWORD
@@ -127,7 +184,7 @@ mkdir -p "${STATE_DIR}"
 unset wyze_email wyze_password wyze_api_id wyze_api_key wyze_totp_key
 unset web_username web_password rtsp_username rtsp_password
 
-log_info "Starting wyze-bridge. Camera filter is a single nickname. Web UI is ingress plus basic auth. RTSP auth is on. MQTT and Gwell are off."
+log_info "Starting wyze-bridge. Camera filter is a single nickname. Web UI is ingress plus basic auth on 172.30.32.1:5080. RTSP auth is on ${WYZE_RTSP_LISTEN}. go2rtc API is 127.0.0.1:1984 only. WebRTC is off. MQTT and Gwell are off."
 
 BIN="${WYZE_BRIDGE_BIN:-/usr/local/bin/wyze-bridge}"
 if [[ ! -x "${BIN}" ]]; then

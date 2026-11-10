@@ -1,0 +1,214 @@
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -20,13 +20,14 @@
+ 	WyzeTOTPKey  string
+ 
+ 	// Bridge HTTP server (WebUI + REST API)
+-	BridgeIP       string // host IP used in WebRTC ICE candidates and URL generation
+-	BridgePort     int
+-	BridgeAuth     bool
+-	BridgeUsername string
+-	BridgePassword string
+-	BridgeAPIToken string // bearer token for REST API
+-	STUNServer     string
++	BridgeIP         string // host IP used in WebRTC ICE candidates and URL generation
++	BridgePort       int
++	BridgeListenHost string // single WebUI address; 172.30.32.1 for Supervisor ingress
++	BridgeAuth       bool
++	BridgeUsername   string
++	BridgePassword   string
++	BridgeAPIToken   string // bearer token for REST API
++	STUNServer       string
+ 
+ 	// Stream Auth — go2rtc RTSP/WebRTC consumer credentials
+ 	StreamAuth string
+@@ -144,13 +145,14 @@
+ 		WyzeTOTPKey:  env("WYZE_TOTP_KEY", ""),
+ 
+ 		// Bridge HTTP server
+-		BridgeIP:       env("BRIDGE_IP", ""),
+-		BridgePort:     envInt("BRIDGE_PORT", 5080),
+-		BridgeAuth:     envBool("BRIDGE_AUTH", false),
+-		BridgeUsername: env("BRIDGE_USERNAME", "wyze"),
+-		BridgePassword: env("BRIDGE_PASSWORD", ""),
+-		BridgeAPIToken: env("BRIDGE_API_TOKEN", ""),
+-		STUNServer:     env("STUN_SERVER", "stun:stun.l.google.com:19302"),
++		BridgeIP:         env("BRIDGE_IP", ""),
++		BridgePort:       envInt("BRIDGE_PORT", 5080),
++		BridgeListenHost: env("BRIDGE_LISTEN_HOST", ""),
++		BridgeAuth:       envBool("BRIDGE_AUTH", false),
++		BridgeUsername:   env("BRIDGE_USERNAME", "wyze"),
++		BridgePassword:   env("BRIDGE_PASSWORD", ""),
++		BridgeAPIToken:   env("BRIDGE_API_TOKEN", ""),
++		STUNServer:       env("STUN_SERVER", "stun:stun.l.google.com:19302"),
+ 
+ 		// Stream Auth
+ 		StreamAuth: env("STREAM_AUTH", ""),
+--- a/internal/go2rtcmgr/config.go
++++ b/internal/go2rtcmgr/config.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"fmt"
++	"net"
+ 	"os"
+ 	"strings"
+ 
+@@ -10,14 +11,29 @@
+ 
+ // Go2RTCConfig is the YAML config for go2rtc.
+ type Go2RTCConfig struct {
++	App     AppConfig              `yaml:"app"`
+ 	Log     LogConfig              `yaml:"log"`
+ 	API     APIConfig              `yaml:"api"`
+ 	RTSP    RTSPConfig             `yaml:"rtsp"`
+ 	WebRTC  WebRTCConfig           `yaml:"webrtc"`
++	SRTP    ListenConfig           `yaml:"srtp"`
++	RTMP    ListenConfig           `yaml:"rtmp"`
+ 	Streams map[string]interface{} `yaml:"streams,omitempty"`
+ 	Record  *RecordGlobalConfig    `yaml:"record,omitempty"`
+ }
+ 
++// AppConfig selects go2rtc modules. An empty list loads every module.
++type AppConfig struct {
++	Modules []string `yaml:"modules"`
++}
++
++// ListenConfig is a module whose only setting is the listen address.
++// An empty listen value disables that server. It must be emitted, not
++// omitted, because go2rtc otherwise installs its default port.
++type ListenConfig struct {
++	Listen string `yaml:"listen"`
++}
++
+ // LogConfig controls go2rtc logging.
+ type LogConfig struct {
+ 	Level string `yaml:"level"`
+@@ -141,34 +157,53 @@
+ 	return entries
+ }
+ 
++// safeRTSPListen accepts only a single IPv4 and TCP 8554.
++// go2rtc skips RTSP authentication for connections from 127.0.0.1, so
++// loopback is rejected. 0.0.0.0 would publish the stream on every host
++// interface, including Home Assistant Core's localhost. Core's own
++// go2rtc already uses 127.0.0.1:18554, and its API uses port 11984.
++// 172.30.32.0/23 is the hassio docker network, not the camera LAN.
++// Any other value disables the RTSP server.
++func safeRTSPListen(raw string) string {
++	host, port, err := net.SplitHostPort(strings.TrimSpace(raw))
++	if err != nil || port != "8554" {
++		return ""
++	}
++	ip := net.ParseIP(host).To4()
++	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
++		return ""
++	}
++	if ip[0] == 172 && ip[1] == 30 && (ip[2] == 32 || ip[2] == 33) {
++		return ""
++	}
++	return net.JoinHostPort(ip.String(), port)
++}
++
+ // Build generates the Go2RTCConfig struct.
+ func (b *ConfigBuilder) Build() *Go2RTCConfig {
+ 	cfg := &Go2RTCConfig{
++		App: AppConfig{
++			// hass is omitted on purpose. go2rtc's hass module, when api.listen
++			// is 127.0.0.1:1984, also serves that API on the hassio gateway.
++			// webrtc and srtp are omitted so :8555 and :8443 are not opened.
++			Modules: []string{
++				"api", "ws", "rtsp", "wyze", "ffmpeg", "exec", "http", "mp4", "hls", "mjpeg",
++			},
++		},
+ 		Log: LogConfig{Level: b.logLevel},
+ 		API: APIConfig{
+-			Listen: ":1984",
+-			Origin: "*", // needed for bridge WebUI on :5080 to use WebRTC player
++			Listen: "127.0.0.1:1984",
+ 		},
+-		RTSP: RTSPConfig{Listen: ":8554"},
++		RTSP: RTSPConfig{Listen: safeRTSPListen(os.Getenv("WYZE_RTSP_LISTEN"))},
+ 		WebRTC: WebRTCConfig{
+-			Listen: ":8889",
++			Listen: "",
+ 		},
++		SRTP: ListenConfig{Listen: ""},
++		RTMP: ListenConfig{Listen: ""},
+ 		// Streams is nil when empty so YAML omits the key entirely.
+ 		// go2rtc parses an empty flow-style `streams: {}` unreliably.
+ 	}
+ 
+-	if b.stunServer != "" {
+-		cfg.WebRTC.ICEServers = []ICEServer{
+-			{URLs: []string{b.stunServer}},
+-		}
+-	}
+-
+-	if b.wbIP != "" {
+-		cfg.WebRTC.Candidates = []string{
+-			fmt.Sprintf("%s:8889", b.wbIP),
+-		}
+-	}
+-
+ 	// Apply STREAM_AUTH to RTSP config
+ 	// If there's a single global auth entry (no per-camera restriction), set it on RTSP
+ 	if len(b.streamAuth) == 1 && len(b.streamAuth[0].Cameras) == 0 {
+--- a/internal/webui/server.go
++++ b/internal/webui/server.go
+@@ -117,15 +117,15 @@
+ // callbacks) stay as Set* methods because they're constructed after
+ // the server is already listening.
+ type Options struct {
+-	Config      *config.Config       // required
+-	CameraMgr   *camera.Manager      // required
+-	Version     string               // required
+-	Log         zerolog.Logger       // required
+-	RootCtx     context.Context      // optional; defaults to context.Background
+-	Issues      *issues.Registry     // optional; nil-safe
+-	Mars        MarsTokenMinter      // optional; nil → CameraToken endpoint returns 503
+-	KVS         KVSStreamProvider    // optional; nil → KVS shim returns 503
+-	AuthPhoneID func() string        // optional; nil → empty ClientId in KVS payload
++	Config      *config.Config    // required
++	CameraMgr   *camera.Manager   // required
++	Version     string            // required
++	Log         zerolog.Logger    // required
++	RootCtx     context.Context   // optional; defaults to context.Background
++	Issues      *issues.Registry  // optional; nil-safe
++	Mars        MarsTokenMinter   // optional; nil → CameraToken endpoint returns 503
++	KVS         KVSStreamProvider // optional; nil → KVS shim returns 503
++	AuthPhoneID func() string     // optional; nil → empty ClientId in KVS payload
+ }
+ 
+ // NewServer constructs a Server from Options. go2rtc, metrics
+@@ -196,19 +196,28 @@
+ }
+ 
+ // Start begins serving HTTP.
++// Host network shares the Home Assistant host stack, so the WebUI is
++// bound only to the Supervisor docker gateway. Ingress connects there.
++// 0.0.0.0 and loopback are refused: loopback is not reachable from the
++// Supervisor container, and every interface would publish the UI on the LAN.
+ func (s *Server) Start() error {
++	if s.cfg.BridgeListenHost != "172.30.32.1" || s.cfg.BridgePort != 5080 {
++		return fmt.Errorf("WebUI must listen on 172.30.32.1:5080")
++	}
++	addr := net.JoinHostPort(s.cfg.BridgeListenHost, fmt.Sprintf("%d", s.cfg.BridgePort))
++
+ 	mux := http.NewServeMux()
+ 	s.registerRoutes(mux)
+ 
+ 	s.srv = &http.Server{
+-		Addr:         fmt.Sprintf(":%d", s.cfg.BridgePort),
++		Addr:         addr,
+ 		Handler:      s.corsMiddleware(s.logMiddleware(mux)),
+ 		ReadTimeout:  30 * time.Second,
+ 		WriteTimeout: 60 * time.Second,
+ 		IdleTimeout:  120 * time.Second,
+ 	}
+ 
+-	s.log.Info().Int("port", s.cfg.BridgePort).Msg("WebUI server starting")
++	s.log.Info().Str("addr", addr).Msg("WebUI server starting")
+ 	return s.srv.ListenAndServe()
+ }
+ 

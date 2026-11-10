@@ -15,10 +15,10 @@ APP = ROOT / "wyze_bridge_db3"
 def main() -> None:
     config = yaml.safe_load((APP / "config.yaml").read_text())
     assert config["slug"] == "wyze_bridge_db3"
-    assert config["version"] == "4.5.0-wyzedb3.3"
+    assert config["version"] == "4.5.0-wyzedb3.4"
     assert config["boot"] == "manual"
     assert config["init"] is False
-    assert config["host_network"] is False
+    assert config["host_network"] is True
     assert config["ingress"] is True
     assert config["ingress_port"] == 5080
     assert config["arch"] == ["amd64"]
@@ -30,12 +30,10 @@ def main() -> None:
     assert config["hassio_api"] is False
     assert config["docker_api"] is False
     assert config["full_access"] is False
-    assert config["ports"] == {"8554/tcp": 8554}
-    assert list(config["ports"]) == ["8554/tcp"]
-    assert "1984/tcp" not in config["ports"]
-    assert "5080/tcp" not in config["ports"]
-    assert "8889/tcp" not in config["ports"]
-    assert "8189/udp" not in config["ports"]
+    assert "ports" not in config
+    config_text = (APP / "config.yaml").read_text()
+    for published in ("1984/tcp", "5080/tcp", "8554/tcp", "8555/tcp", "8889/tcp", "8189/udp", "18554", "18555", "11984"):
+        assert published not in config_text, published
     assert config["options"] == {"filter_names": "Side door"}
     schema = config["schema"]
     for key, kind in {
@@ -70,10 +68,6 @@ def main() -> None:
     )
     for key, kind in schema.items():
         assert schema_element.match(kind), f"schema {key}={kind!r} is not a Supervisor type"
-    port_key = re.compile(r"^\d+(?:/tcp|/udp)?$")
-    for key in config["ports"]:
-        assert port_key.match(key), key
-
     dockerfile = (APP / "Dockerfile").read_text()
     for needle in (
         "sha256:1a97fbadb2eb46ba8e4bce6b08f45bc24ef0180d1f3b3192886a080c8268ba71",
@@ -88,7 +82,9 @@ def main() -> None:
         "GOARCH=amd64",
         "wyzedb3-a42e34e-pkg-tutk.patch",
         "strict-filter.patch",
-        "4.5.0+strict-filter",
+        "host-listeners.patch",
+        "4.5.0+strict-filter+hostnet",
+        "iproute2",
     ):
         assert needle in dockerfile, needle
     assert "COPY --from=upstream" not in dockerfile
@@ -114,6 +110,35 @@ def main() -> None:
     assert code_patch.count(b"diff --git") == 4
     assert full_patch.count(b"diff --git") == 5
 
+    listeners = (APP / "patches/host-listeners.patch").read_bytes()
+    listener_text = listeners.decode()
+    added = "\n".join(
+        line[1:]
+        for line in listener_text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    for needle in (
+        "127.0.0.1:1984",
+        "172.30.32.1:5080",
+        "127.0.0.1:18554",
+        "safeRTSPListen",
+        '"api", "ws", "rtsp", "wyze"',
+        'Listen: ""',
+    ):
+        assert needle in added, needle
+    assert '"hass"' not in added
+    for unsafe in (
+        'Listen: ":1984"',
+        'Listen: ":8554"',
+        'Listen: ":8555"',
+        'Listen: ":8889"',
+        'Origin: "*"',
+    ):
+        assert unsafe not in added, unsafe
+    assert hashlib.sha256(listeners).hexdigest() == (
+        "ef5bf78c24b8f7cbc8bf3fbb7c5b2081e73d8205c086e0e46e24e949a10b971a"
+    )
+
     repo = yaml.safe_load((ROOT / "repository.yaml").read_text())
     assert repo["name"]
     assert "config.yaml" not in (ROOT / "repository.yaml").read_text()
@@ -132,6 +157,12 @@ def main() -> None:
     assert "GWELL_ENABLED=false" in run
     assert "MQTT_ENABLED=false" in run
     assert "BRIDGE_AUTH=true" in run
+    assert 'BRIDGE_LISTEN_HOST="172.30.32.1"' in run
+    assert "BRIDGE_PORT=5080" in run
+    assert "WYZE_RTSP_LISTEN" in run
+    assert "127.0.0.1:1984" in run
+    assert "0.0.0.0:8554" not in run
+    assert "0.0.0.0:1984" not in run
     assert "exec " in run
     print("config ok")
 

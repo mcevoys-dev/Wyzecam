@@ -44,7 +44,7 @@ configuration:
     description: >-
       The password half of STREAM_AUTH. At least 16 characters. A colon is
       allowed. @ and a vertical bar are not. Required before the app will
-      start. Host port 8554 stays authenticated with this password.
+      start. RTSP stays authenticated on the host LAN address, port 8554.
   filter_names:
     name: Camera nickname
     description: >-

@@ -129,6 +129,19 @@ Bridge filter, with Go 1.26.4 on linux/amd64, after `strict-filter.patch` on the
 
 `tests/test_run.sh` checked startup with a fake bridge. It does not exercise the filter; that is the Go test above.
 
-No container image was built. There is no Docker daemon in this environment. Supervisor builds the Dockerfile on the device only after a Git URL it can clone is added.
+## Host listeners, v4.5.0-wyzedb3.4
 
-No Wyze account, no camera, and no Home Assistant were available. Nothing here shows that a doorbell streamed. Host port 8554 is the documented mapping for Core; it does not remove Docker NAT in front of the camera.
+`patches/host-listeners.patch` sha256 `ef5bf78c24b8f7cbc8bf3fbb7c5b2081e73d8205c086e0e46e24e949a10b971a` is applied to the same v4.5.0 tree after `strict-filter.patch`. It changes three files: `internal/config/config.go`, `internal/go2rtcmgr/config.go`, and `internal/webui/server.go`.
+
+| Listener | Resulting address | Why |
+| --- | --- | --- |
+| go2rtc API | `127.0.0.1:1984` | The bridge client is hardcoded to that URL. The `hass` module is not loaded, so go2rtc does not also bind the hassio gateway. |
+| Web UI | `172.30.32.1:5080` | Supervisor ingress uses the hassio gateway. Any other host is refused. |
+| RTSP | `WYZE_RTSP_LISTEN`, one IPv4, port 8554 | `run.sh` sets this to the default-route source. Loopback is refused because go2rtc skips RTSP auth for `127.0.0.1`. |
+| WebRTC, SRTP, RTMP | empty `listen` | go2rtc's defaults are `:8555`, `:8443`, and an open RTMP port when the module is loaded. Those modules are omitted. |
+
+Home Assistant Core, in current `dev` `homeassistant/components/go2rtc/server.py`, uses `127.0.0.1:18554`, `:18555/tcp`, and API port `11984`. This patch does not bind those.
+
+`4.5.0-wyzedb3.3` was built and installed on Home Assistant amd64 outside this tree. Its log showed one filtered doorbell and, on RTSP, `wyze: connect failed: discovery timeout`. No camera address, account, or log body is stored here. This version does not claim that host networking fixes that timeout.
+
+No container image of `4.5.0-wyzedb3.4` was built in this workspace. Supervisor builds the Dockerfile on the device after this branch is merged. Nothing here shows that a doorbell streamed.
